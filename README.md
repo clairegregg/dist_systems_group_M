@@ -27,3 +27,8 @@ If you want to access MongoDB from outside the cluster (eg if you want to view t
 ```
 kubectl port-forward --address 0.0.0.0 svc/mongodb 27017:27017
 ```
+
+When shutting the system down, run the following. If you have updated any code and want to deploy it to your local cluster, run this before repeating the steps above.
+```
+./cleanup.sh
+```
