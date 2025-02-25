@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pacman-central
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pacman-central
+  template:
+    metadata:
+      labels:
+        app: pacman-central
+    spec:
+      containers:
+        - name: pacman-central
+          image: ${DOCKER_USERNAME}/pacman-central:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MONGO_URI
+              value: "mongodb://admin:password@mongodb:27017"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pacman-central
+spec:
+  selector:
+    app: pacman-central
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

@@ -1,17 +1,36 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"os"
+	"log"
 
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+var client *mongo.Client
+var mongoURI = os.Getenv("MONGO_URI")
 var db = make(map[string]string)
 
 func setupRouter() *gin.Engine {
 	// Disable Console Color
 	// gin.DisableConsoleColor()
 	r := gin.Default()
+
+	// Test mongodb connection
+	r.GET("/dbconn", func(c *gin.Context) {
+		// Ping the database
+		err := client.Ping(context.Background(), nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to connect to database"})
+		}
+
+		c.String(http.StatusOK, "Able to connect to DB")
+	})
 
 	// Ping test
 	r.GET("/ping", func(c *gin.Context) {
@@ -67,7 +86,24 @@ func setupRouter() *gin.Engine {
 	return r
 }
 
+func connectToDB(ctx context.Context) *mongo.Client {
+	if mongoURI == "" {
+		log.Println("MongoDB URI is not set.")
+	}
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+
+	if err != nil {
+		log.Println(fmt.Errorf("unable to connect to MongoDB: %v", err))
+	}
+
+	return client
+}
+
 func main() {
+	ctx := context.Background()
+	client = connectToDB(ctx)
+	defer client.Disconnect(ctx)
 	r := setupRouter()
 	// Listen and Server in 0.0.0.0:8080
 	r.Run(":8080")
