@@ -27,4 +27,4 @@ sleep 5s
 kubectl wait --for=condition=ready pod -l app=pacman-central --timeout=300s
 
 # Port forward the web application
-nohup kubectl port-forward --address 0.0.0.0 svc/pacman-central 8080:80
+nohup kubectl port-forward --address 0.0.0.0 svc/pacman-central 8080:80 > central-server-port.log 2>&1 &

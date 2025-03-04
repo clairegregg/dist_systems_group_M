@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pacman-chunk
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pacman-chunk
+  template:
+    metadata:
+      labels:
+        app: pacman-chunk
+    spec:
+      containers:
+        - name: pacman-chunk
+          image: ${DOCKER_USERNAME}/pacman-chunk:latest
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pacman-chunk
+spec:
+  selector:
+    app: pacman-chunk
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
