@@ -32,3 +32,7 @@ When shutting the system down, run the following. If you have updated any code a
 ```
 ./cleanup.sh
 ```
+
+### Start client locally
+
+Follow instructions in the [frontend's README](frontend/README.md).
