@@ -1,4 +1,4 @@
-name: Central Server - Docker Image 
+name: Deploy Central Server Update
 
 on:
   workflow_dispatch:
