@@ -1,4 +1,4 @@
-name: Central Server - Docker Image 
+name: Chunk Server - Docker Image 
 
 on:
   push:
@@ -25,5 +25,5 @@ jobs:
     - name: Build and push Docker images
       uses: docker/build-push-action@v6
       with: 
-        tags: ${{ vars.DOCKERHUB_USERNAME }}/pacman-central:latest
-        context: central_server/src/central_server
+        tags: ${{ vars.DOCKERHUB_USERNAME }}/pacman-chunk:latest
+        context: chunk_server/src/chunk_server
