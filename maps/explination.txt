@@ -1,0 +1,3 @@
+0 = free space (if going for traditional PacMan these should have food/coins)
+1 = wall
+2 = gate (ghosts spawn behind gate and go back to their spawn when killed)
