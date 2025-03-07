@@ -1,74 +1,163 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+	"bytes"
 
+	"github.com/Cormuckle/dist_systems_group_M/chunk_server/kafka"
 	"github.com/gin-gonic/gin"
 )
 
-var db = make(map[string]string)
+var (
+	kafkaProducer  *kafka.Producer
+	kafkaConsumer  *kafka.Consumer
+	chunkID        string
+	chunkTopic     string
+	centralTopic   = "chunk_to_central"
+	broadcastTopic = "central_to_chunk_broadcast"
+)
 
+// generateChunkID generates a unique chunk server ID based on hostname or timestamp
+func generateChunkID() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = fmt.Sprintf("chunk_server_%d", time.Now().Unix())
+	}
+	return hostname
+}
+
+// setupRouter sets up HTTP routes for the chunk server
 func setupRouter() *gin.Engine {
-	// Disable Console Color
-	// gin.DisableConsoleColor()
 	r := gin.Default()
 
-	// Ping test
+	// Health check endpoint
 	r.GET("/ping", func(c *gin.Context) {
 		c.String(http.StatusOK, "pong")
 	})
 
-	// Get user value
-	r.GET("/user/:name", func(c *gin.Context) {
-		user := c.Params.ByName("name")
-		value, ok := db[user]
-		if ok {
-			c.JSON(http.StatusOK, gin.H{"user": user, "value": value})
-		} else {
-			c.JSON(http.StatusOK, gin.H{"user": user, "status": "no value"})
+	// Send a message to the central server
+	r.POST("/send", func(c *gin.Context) {
+		var req struct {
+			Message string `json:"message" binding:"required"`
 		}
-	})
-
-	// Authorized group (uses gin.BasicAuth() middleware)
-	// Same than:
-	// authorized := r.Group("/")
-	// authorized.Use(gin.BasicAuth(gin.Credentials{
-	//	  "foo":  "bar",
-	//	  "manu": "123",
-	//}))
-	authorized := r.Group("/", gin.BasicAuth(gin.Accounts{
-		"foo":  "bar", // user:foo password:bar
-		"manu": "123", // user:manu password:123
-	}))
-
-	/* example curl for /admin with basicauth header
-	   Zm9vOmJhcg== is base64("foo:bar")
-
-		curl -X POST \
-	  	http://localhost:8080/admin \
-	  	-H 'authorization: Basic Zm9vOmJhcg==' \
-	  	-H 'content-type: application/json' \
-	  	-d '{"value":"bar"}'
-	*/
-	authorized.POST("admin", func(c *gin.Context) {
-		user := c.MustGet(gin.AuthUserKey).(string)
-
-		// Parse JSON
-		var json struct {
-			Value string `json:"value" binding:"required"`
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
 		}
 
-		if c.Bind(&json) == nil {
-			db[user] = json.Value
-			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		err := kafkaProducer.SendMessage(centralTopic, fmt.Sprintf("[%s]: %s", chunkID, req.Message))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "Failed to send"})
+			return
 		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "Message sent to central server"})
 	})
 
 	return r
 }
 
+// consumeMessages listens for messages from Kafka topics
+func consumeMessages() {
+	topics := []string{broadcastTopic, chunkTopic}
+	log.Printf("Chunk Server [%s] listening on topics: %v", chunkID, topics)
+
+	for {
+		message, topic, err := kafkaConsumer.ConsumeMultiTopic(topics)
+		if err != nil {
+			log.Printf("Error consuming from Kafka: %v\n", err)
+			time.Sleep(2 * time.Second) // Retry after 2 seconds
+			continue
+		}
+		log.Printf("Received message on [%s]: %s\n", topic, message)
+	}
+}
+
+func notifyCentralServer() {
+	centralServerURL := "http://central_server:8080/register_chunk"
+
+	payload := fmt.Sprintf(`{"chunk_id": "%s"}`, chunkID)
+	req, err := http.NewRequest("POST", centralServerURL, bytes.NewBuffer([]byte(payload)))
+	if err != nil {
+		log.Printf("Failed to create request to central server: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Failed to notify central server: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Println("Chunk ID successfully registered with central server")
+	} else {
+		log.Printf("Failed to register chunk with central server, status: %d", resp.StatusCode)
+	}
+}
+
 func main() {
+	// Generate a unique chunk server ID and topic
+	chunkID = generateChunkID()
+	chunkTopic = fmt.Sprintf("central_to_chunk_%s", chunkID)
+
+	// Kafka broker setup
+	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
+	if kafkaBroker == "" {
+		kafkaBroker = "kafka:9092" // Default Kafka broker address
+	}
+
+	// Initialize Kafka Producer
+	producer, err := kafka.NewProducer(kafkaBroker)
+	if err != nil {
+		log.Fatalf("Failed to initialize Kafka producer: %v", err)
+	}
+	kafkaProducer = producer
+
+	// Create topic for this chunk server
+	err = kafkaProducer.CreateTopic(chunkTopic)
+	if err != nil {
+		log.Fatalf("Failed to create Kafka topic: %v", err)
+	}
+	log.Printf("Kafka topic '%s' created", chunkTopic)
+
+	// Initialize Kafka Consumer
+	consumer, err := kafka.NewConsumer(kafkaBroker, chunkID)
+	if err != nil {
+		log.Fatalf("Failed to initialize Kafka consumer: %v", err)
+	}
+	kafkaConsumer = consumer
+
+	// Start consuming messages from the central server
+	go consumeMessages()
+    
+	// notify central about working
+	notifyCentralServer();
+
+	// Graceful shutdown handling
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		<-sigChan
+		log.Println("Shutting down Chunk Server...")
+
+		// Cleanup Kafka connections
+		producer.Close()
+		consumer.Close()
+
+		os.Exit(0)
+	}()
+
+	// Setup HTTP server
 	r := setupRouter()
-	// Listen and Server in 0.0.0.0:8080
 	r.Run(":8080")
 }

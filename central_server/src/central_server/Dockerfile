@@ -1,5 +1,5 @@
 
-FROM golang:1.22-alpine
+FROM golang:1.23-alpine
 WORKDIR /app
 
 # Copy the Go module files and download dependencies
@@ -10,6 +10,6 @@ RUN go mod download
 COPY . .
 
 # Build and run the server
-RUN go build -o gin-server
+RUN go build -o gin-server .    
 EXPOSE 8080
 CMD ["/app/gin-server"]
