@@ -1,0 +1,63 @@
+==============================
+Central Server Endpoints
+==============================
+
+1. Health Check
+------------------------------
+Check if the central server is running.
+Command:
+curl -X GET http://<central_server_host>:8080/ping
+
+2. Broadcast Message to All Chunk Servers
+------------------------------
+Send a broadcast message from the central server to all chunk servers.
+Command:
+curl -X POST http://<central_server_host>:8080/broadcast \
+     -H "Content-Type: application/json" \
+     -d '{"message": "Your broadcast message"}'
+
+3. Send Message to a Specific Chunk Server
+------------------------------
+Send a message to a specific chunk server by specifying its ID.
+Command:
+curl -X POST http://<central_server_host>:8080/send/<chunk_id> \
+     -H "Content-Type: application/json" \
+     -d '{"message": "Your message"}'
+Replace <chunk_id> with the actual ID of the chunk server you want to target.
+
+4. Register a Chunk Server
+------------------------------
+This endpoint is used by chunk servers to register themselves with the central server.
+Command:
+curl -X POST http://<central_server_host>:8080/register_chunk \
+     -H "Content-Type: application/json" \
+     -d '{"chunk_id": "chunk_server_123"}'
+
+5. List Registered Chunk Servers
+------------------------------
+Retrieve a list of all registered chunk servers.
+Command:
+curl -X GET http://<central_server_host>:8080/list_chunks
+
+
+==============================
+Chunk Server Endpoints
+==============================
+
+1. Health Check
+------------------------------
+Verify that the chunk server is running.
+Command:
+curl -X GET http://<chunk_server_host>:8080/ping
+
+2. Send Message to Central Server
+------------------------------
+Have the chunk server send a message to the central server.
+Command:
+curl -X POST http://<chunk_server_host>:8080/send \
+     -H "Content-Type: application/json" \
+     -d '{"message": "Hello from chunk server"}'
+
+Note:
+- The chunk server automatically registers itself with the central server on startup.
+- Replace <central_server_host> and <chunk_server_host> with the actual hostnames or IP addresses where your servers are running.
