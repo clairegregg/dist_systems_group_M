@@ -1,0 +1,18 @@
+# Ignore Git and related metadata
+.git
+.github
+
+# Ignore environment files
+.env
+
+# Ignore logs
+*.log
+*.log.*
+
+# Ignore Kubernetes manifests (if you don't need them in the image)
+k8s/
+
+# macOS Finder files
+.DS_Store
+
+# (Optional) add any other files or directories you don’t want in your build context
