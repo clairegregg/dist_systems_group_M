@@ -101,6 +101,18 @@ func (c *Consumer) ConsumeMultiTopic(topics []string) (string, string, error) {
 	return "", "", fmt.Errorf("no messages received")
 }
 
+func (c *Consumer) ConsumeMessage(topic string) (string, error) {
+	// This example assumes you consume from partition 0.
+	partitionConsumer, err := c.consumer.ConsumePartition(topic, 0, sarama.OffsetNewest)
+	if err != nil {
+		return "", err
+	}
+	defer partitionConsumer.Close()
+	
+	msg := <-partitionConsumer.Messages()
+	return string(msg.Value), nil
+}
+
 // Close shuts down the consumer
 func (c *Consumer) Close() {
 	if err := c.consumer.Close(); err != nil {
