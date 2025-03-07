@@ -22,7 +22,7 @@ sleep 5s
 kubectl wait --for=condition=ready pod -l app=mongodb --timeout=300s
 
 # Using your docker username
-envsubst < central_server/k8s/pacman-central.yaml | kubectl apply -f -
+sed 's/clairegregg/${DOCKER_USERNAME}/g' central_server/k8s/pacman-central.yaml | envsubst | kubectl apply -f -
 sleep 5s
 kubectl wait --for=condition=ready pod -l app=pacman-central --timeout=300s
 

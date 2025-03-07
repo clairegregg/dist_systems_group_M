@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: pacman-central
-          image: ${DOCKER_USERNAME}/pacman-central:latest
+          image: clairegregg/pacman-central:latest
           ports:
             - containerPort: 8080
           env:

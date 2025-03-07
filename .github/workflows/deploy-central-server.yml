@@ -29,6 +29,4 @@ jobs:
         action: deploy
         manifests: |
           central_server/k8s
-        images: |
-         ${DOCKER_USERNAME}/pacman-central:latest:${{ vars.DOCKERHUB_USERNAME }}/pacman-central:latest
 
