@@ -18,12 +18,12 @@ kind create cluster --name central
 
 # Create and wait for mongodb service
 kubectl apply -f central_server/k8s/mongodb.yaml
-sleep 5s
+sleep 5
 kubectl wait --for=condition=ready pod -l app=mongodb --timeout=300s
 
 # Using your docker username
 envsubst < central_server/k8s/pacman-central.yaml | kubectl apply -f -
-sleep 5s
+sleep 5
 kubectl wait --for=condition=ready pod -l app=pacman-central --timeout=300s
 
 # Port forward the web application
