@@ -55,3 +55,29 @@ When shutting the system down, run the following. If you have updated any code a
 ### Start client locally
 
 Follow instructions in the [frontend's README](frontend/README.md).
+
+
+
+## Run Using Docker Compose
+
+For a quicker local development setup with host reload functionality, you can also run the entire system using Docker Compose. This command will build the containers and mount your source code for live updates:
+
+1. To Build Docker
+```sh
+docker-compose up --build
+```
+
+2. To start everytime 
+```sh
+docker-compose up
+```
+
+3. To Stop 
+```sh
+docker-compose down
+```
+
+### The services include:
+- MongoDB on port 27017.
+- Central Server on port 8080.
+- There are two Chunk Servers for now on ports 8081, 8082.
