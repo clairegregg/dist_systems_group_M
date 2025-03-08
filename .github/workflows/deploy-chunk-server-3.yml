@@ -1,4 +1,4 @@
-name: Deploy Chunk Server 1 Update
+name: Deploy Chunk Server 3 Update
 
 on:
   workflow_dispatch:
