@@ -7,6 +7,7 @@ toolchain go1.24.0
 require (
 	github.com/IBM/sarama v1.45.1
 	github.com/gin-gonic/gin v1.10.0
+	github.com/gorilla/websocket v1.5.3
 )
 
 require (

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Cormuckle/dist_systems_group_M/chunk_server/kafka"
 	"github.com/gin-gonic/gin"
+	"github.com/Cormuckle/dist_systems_group_M/chunk_server/websocket"
 )
 
 // Global variables.
@@ -113,6 +114,11 @@ func setupRouter() *gin.Engine {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "Message sent to central server"})
+	})
+
+	// websocket Handler
+	r.GET("/ws", func(c *gin.Context) {
+		websocket.WSHandler(c.Writer, c.Request)
 	})
 
 	return r
