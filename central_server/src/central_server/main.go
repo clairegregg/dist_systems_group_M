@@ -6,11 +6,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 	"os/signal"
 	"syscall"
 
 	"github.com/Cormuckle/dist_systems_group_M/central_server/kafka"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -40,6 +42,52 @@ func connectToDB(ctx context.Context) (*mongo.Client, error) {
 
 	log.Println("Connected to MongoDB")
 	return client, nil
+}
+
+// Request/Response models
+type CreateUserRequest struct {
+	UserName   string `json:"userName" binding:"required"`
+	PacmanBody string `json:"pacmanBody"`
+}
+
+type CreateUserResponse struct {
+	UserName           string `json:"userName"`
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	SpawnCoordinates   struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	} `json:"spawnCoordinates"`
+}
+
+type GetChunkServerRequest struct {
+	UserName string `json:"userName" binding:"required"`
+}
+
+type GetChunkServerResponse struct {
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	TileCoordinates    struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	} `json:"tileCoordinates"`
+}
+
+type NewChunkServerRequest struct {
+	Quadrant string `json:"quadrant" binding:"required"`
+}
+
+type NewChunkServerResponse struct {
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	Status             string `json:"status"`
+}
+
+type UpdateScoreRequest struct {
+	UserName string `json:"userName" binding:"required"`
+	Score    int    `json:"score" binding:"required"`
+}
+
+type LeaderboardEntry struct {
+	UserName string `json:"userName"`
+	Score    int    `json:"score"`
 }
 
 // setupRouter initializes HTTP routes.
@@ -96,6 +144,111 @@ func setupRouter() *gin.Engine {
 		}
 	})
 
+	// ------------------------------- API Endpoints for the Central Server
+
+	// create new user
+	r.POST("/users", func(c *gin.Context) {
+		var req CreateUserRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Check if username exists in the in-memory map as a simple cache/duplicate check
+		if _, exists := db[req.UserName]; exists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "username in use"})
+			return
+		}
+
+		userDoc := gin.H{
+			"userName":   req.UserName,
+			"pacmanBody": req.PacmanBody,
+			"createdAt":  time.Now(),
+			"score":      0,
+		}
+
+		// Insert the document into the "users" collection
+		collection := client.Database("game").Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := collection.InsertOne(ctx, userDoc)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to insert user into database"})
+			return
+		}
+
+		db[req.UserName] = req.PacmanBody
+
+		// Build the response object
+		resp := CreateUserResponse{
+			UserName:           req.UserName,
+			ChunkServerAddress: "http://chunkserver.example.com", // Placeholder address
+		}
+		resp.SpawnCoordinates.X = 100.0
+		resp.SpawnCoordinates.Y = 200.0
+
+		c.JSON(http.StatusCreated, resp)
+	})
+
+	// PUT endpoint to update a user's score
+	r.PUT("/scores", func(c *gin.Context) {
+		var req UpdateScoreRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		collection := client.Database("game").Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		filter := bson.M{"userName": req.UserName}
+		update := bson.M{"$max": bson.M{"highScore": req.Score}}
+
+		result, err := collection.UpdateOne(ctx, filter, update)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update score"})
+			return
+		}
+		if result.MatchedCount == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "User not found"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "score updated"})
+	})
+
+	// GET endpoint to retrieve the top 10 leaderboard entries
+	r.GET("/leaderboard", func(c *gin.Context) {
+		collection := client.Database("game").Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Set up find options to sort by highScore descending and limit to 10 results.
+		opts := options.Find().SetSort(bson.D{{Key: "highScore", Value: -1}}).SetLimit(10)
+		cursor, err := collection.Find(ctx, bson.M{}, opts)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error retrieving leaderboard"})
+			return
+		}
+		defer cursor.Close(ctx)
+
+		var leaderboard []LeaderboardEntry
+		for cursor.Next(ctx) {
+			var userDoc struct {
+				UserName  string `bson:"userName"`
+				HighScore int    `bson:"highScore"`
+			}
+			if err := cursor.Decode(&userDoc); err != nil {
+				continue
+			}
+			leaderboard = append(leaderboard, LeaderboardEntry{
+				UserName: userDoc.UserName,
+				Score:    userDoc.HighScore,
+			})
+		}
+		c.JSON(http.StatusOK, leaderboard)
+    
 	// Send a broadcast message to all chunk servers
 	// This is just for tesing purpose but we can use this function iternally to communicate
 	/* 
