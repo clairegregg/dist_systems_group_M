@@ -7,7 +7,7 @@ import (
 
 /*
 Outside of this file
-1. Modify chunk servers to run in headless mode so they can all be accessed seperately
+1. Modify chunk servers to run in headless mode so they can all be accessed seperately   v/
 2. Set up port forwarding for central server, and all chunk server ports - aiming to port forward central server to 6440 (which will be open on the server), and chunk servers to something in the range 36000-37000
 3. Use caddy api to reverse proxy eg x-1y1.chunk1.clairegregg.com to eg port forwarded localhost:36101
 4. Write/read database with specific chunk urls for each coordinate - eg x-1y1.chunk1.clairegregg.com

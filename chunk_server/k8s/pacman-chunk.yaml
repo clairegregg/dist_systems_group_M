@@ -1,12 +1,13 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: pacman-chunk
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: pacman-chunk
+  serviceName: "pacman-chunk"  # Each headless service will be accessible as something like pacman-chunk-0.pacman-bhunk
   template:
     metadata:
       labels:
@@ -14,7 +15,7 @@ spec:
     spec:
       containers:
         - name: pacman-chunk
-          image: ${DOCKER_USERNAME}/pacman-chunk:latest
+          image: clairegregg/pacman-chunk:latest
           ports:
             - containerPort: 8080
 ---
@@ -23,6 +24,7 @@ kind: Service
 metadata:
   name: pacman-chunk
 spec:
+  clusterIP: None
   selector:
     app: pacman-chunk
   ports:
