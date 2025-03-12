@@ -248,6 +248,7 @@ func setupRouter() *gin.Engine {
 			})
 		}
 		c.JSON(http.StatusOK, leaderboard)
+	})
     
 	// Send a broadcast message to all chunk servers
 	// This is just for tesing purpose but we can use this function iternally to communicate

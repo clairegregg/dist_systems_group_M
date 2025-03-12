@@ -1,15 +1,18 @@
 package k8s
 
 import (
+	"context"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 /*
 Outside of this file
 1. Modify chunk servers to run in headless mode so they can all be accessed seperately   v/
 2. Set up port forwarding for central server, and all chunk server ports - aiming to port forward central server to 6440 (which will be open on the server), and chunk servers to something in the range 36000-37000
-3. Use caddy api to reverse proxy eg x-1y1.chunk1.clairegregg.com to eg port forwarded localhost:36101
+3. Use caddy api to reverse proxy eg x-1y1.chunk1.clairegregg.com to eg port forwarded localhost:36101    X  using dynamic routing instead
 4. Write/read database with specific chunk urls for each coordinate - eg x-1y1.chunk1.clairegregg.com
 
 In this file
@@ -36,5 +39,12 @@ func KubeClients(kubeconfigs []string) (error, []*kubernetes.Clientset) {
 	return nil, clientsets
 }
 
-func checkChunkCount(clientset *kubernetes.Clientset) {
+func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (error, int) {
+	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=pacman-chunk",
+	})
+	if err != nil {
+		return err, 0
+	}
+	return nil, len(pods.Items)
 }
