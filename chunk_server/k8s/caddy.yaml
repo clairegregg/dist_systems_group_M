@@ -7,10 +7,10 @@ data:
     {
       auto_https off 
     }
-    http://chunk{i}.clairegregg.com {
+    :80 {
       reverse_proxy pacman-chunk-{query.id}.pacman-chunk:8080 
     }
-    chunk{i}.clairegregg.com {
+    :443 {
       reverse_proxy pacman-chunk-{query.id}.pacman-chunk:8080 
     }
 ---
