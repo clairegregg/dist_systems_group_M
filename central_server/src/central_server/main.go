@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
+	"github.com/Cormuckle/dist_systems_group_M/central_server/k8s"
 	"github.com/Cormuckle/dist_systems_group_M/central_server/kafka"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
@@ -18,14 +20,16 @@ import (
 )
 
 var (
-	client        *mongo.Client
-	mongoURI      = os.Getenv("MONGO_URI")
-	db            = make(map[string]string)
-	kafkaProducer *kafka.Producer
-	kafkaConsumer *kafka.Consumer
-	broadcastTopic = "central_to_chunk_broadcast"
-	chunkToCentral = "chunk_to_central"
-	chunkServers   []string // Stores registered chunk server IDs
+	client          *mongo.Client
+	mongoURI        = os.Getenv("MONGO_URI")
+	kubeconfigPaths = os.Getenv("KUBECONFIGS")
+	db              = make(map[string]string)
+	kafkaProducer   *kafka.Producer
+	kafkaConsumer   *kafka.Consumer
+	broadcastTopic  = "central_to_chunk_broadcast"
+	chunkToCentral  = "chunk_to_central"
+	chunkServers    []string // Stores registered chunk server IDs
+	clusterClients  []*k8s.ClusterClient
 )
 
 // connectToDB initializes a MongoDB connection.
@@ -44,6 +48,13 @@ func connectToDB(ctx context.Context) (*mongo.Client, error) {
 	return client, nil
 }
 
+// MongoDB Data Types
+type Chunk struct {
+	x   int
+	y   int
+	url string
+}
+
 // Request/Response models
 type CreateUserRequest struct {
 	UserName   string `json:"userName" binding:"required"`
@@ -54,8 +65,8 @@ type CreateUserResponse struct {
 	UserName           string `json:"userName"`
 	ChunkServerAddress string `json:"chunkServerAddress"`
 	SpawnCoordinates   struct {
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
+		X int `json:"x"`
+		Y int `json:"y"`
 	} `json:"spawnCoordinates"`
 }
 
@@ -66,8 +77,8 @@ type GetChunkServerRequest struct {
 type GetChunkServerResponse struct {
 	ChunkServerAddress string `json:"chunkServerAddress"`
 	TileCoordinates    struct {
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
+		X int `json:"x"`
+		Y int `json:"y"`
 	} `json:"tileCoordinates"`
 }
 
@@ -93,7 +104,7 @@ type LeaderboardEntry struct {
 // setupRouter initializes HTTP routes.
 func setupRouter() *gin.Engine {
 	r := gin.Default()
-    
+
 	r.GET("/dbconn", func(c *gin.Context) {
 		// Ping the database
 		err := client.Ping(context.Background(), nil)
@@ -117,7 +128,7 @@ func setupRouter() *gin.Engine {
 			c.JSON(http.StatusOK, gin.H{"user": user, "status": "no value"})
 		}
 	})
-    
+
 	// Authorized group (uses gin.BasicAuth() middleware)
 	// Same than:
 	// authorized := r.Group("/")
@@ -249,15 +260,15 @@ func setupRouter() *gin.Engine {
 		}
 		c.JSON(http.StatusOK, leaderboard)
 	})
-    
+
 	// Send a broadcast message to all chunk servers
 	// This is just for tesing purpose but we can use this function iternally to communicate
-	/* 
-	
-	curl -X POST http://<central_server_host>:8080/broadcast \
-     -H "Content-Type: application/json" \
-     -d '{"message": "Your broadcast message"}'
-	
+	/*
+
+			curl -X POST http://<central_server_host>:8080/broadcast \
+		     -H "Content-Type: application/json" \
+		     -d '{"message": "Your broadcast message"}'
+
 	*/
 	r.POST("/broadcast", func(c *gin.Context) {
 		var req struct {
@@ -279,11 +290,11 @@ func setupRouter() *gin.Engine {
 	})
 
 	// Send a message to a specific chunk server
-	/* 
-	curl -X POST http://<central_server_host>:8080/send/<chunk_id> \
-     -H "Content-Type: application/json" \
-     -d '{"message": "Your message"}'
-	
+	/*
+			curl -X POST http://<central_server_host>:8080/send/<chunk_id> \
+		     -H "Content-Type: application/json" \
+		     -d '{"message": "Your message"}'
+
 	*/
 	r.POST("/send/:chunk_id", func(c *gin.Context) {
 		chunkID := c.Param("chunk_id")
@@ -308,11 +319,11 @@ func setupRouter() *gin.Engine {
 	})
 
 	// Register a new chunk server
-	/* 
-	curl -X POST http://<central_server_host>:8080/register_chunk \
-     -H "Content-Type: application/json" \
-     -d '{"chunk_id": "chunk_server_123"}'
-	
+	/*
+			curl -X POST http://<central_server_host>:8080/register_chunk \
+		     -H "Content-Type: application/json" \
+		     -d '{"chunk_id": "chunk_server_123"}'
+
 	*/
 	r.POST("/register_chunk", func(c *gin.Context) {
 		var req struct {
@@ -338,10 +349,10 @@ func setupRouter() *gin.Engine {
 
 		c.JSON(http.StatusOK, gin.H{"status": "Chunk registered"})
 	})
- 
+
 	// List all registered chunk servers
 	/*
-	curl -X GET http://<central_server_host>:8080/list_chunks
+		curl -X GET http://<central_server_host>:8080/list_chunks
 	*/
 	r.GET("/list_chunks", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"chunk_servers": chunkServers})
@@ -362,6 +373,53 @@ func consumeChunkMessages(ctx context.Context) {
 	}
 }
 
+func getChunk(ctx context.Context, x, y int) (string, error) {
+	collection := client.Database("game").Collection("chunks")
+	ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	cursor, err := collection.Find(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}})
+	if err != nil {
+		return "", err
+	}
+	var results []Chunk
+	if err = cursor.All(ctxC, &results); err != nil {
+		return "", err
+	}
+	defer cursor.Close(ctx)
+
+	if len(results) == 0 {
+		url, err := k8s.NewChunkServer(ctx, clusterClients)
+		if err != nil {
+			return "", err
+		}
+		err = addChunkToDB(ctx, x, y, url)
+		if err != nil {
+			return "", err
+		}
+		return url, nil
+	}
+	chunk := results[0]
+	return chunk.url, nil
+}
+
+func addChunkToDB(ctx context.Context, x, y int, url string) error {
+	collection := client.Database("game").Collection("chunks")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// Add chunk to DB
+	chunk := Chunk{
+		x:   x,
+		y:   y,
+		url: url,
+	}
+	_, err := collection.InsertOne(ctx, chunk)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -373,6 +431,10 @@ func main() {
 		log.Fatalf("Error connecting to MongoDB: %v", err)
 	}
 	defer client.Disconnect(ctx)
+
+	// Create k8s clients for chunk clusters
+	kubeconfigs := strings.Split(kubeconfigPaths, ",")
+	clusterClients, err = k8s.KubeClients(kubeconfigs)
 
 	// Kafka setup
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")

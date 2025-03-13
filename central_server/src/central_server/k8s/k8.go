@@ -33,22 +33,22 @@ type ClusterClient struct {
 	currentCount int
 }
 
-func KubeClients(kubeconfigs []string) (error, []*ClusterClient) {
+func KubeClients(kubeconfigs []string) ([]*ClusterClient, error) {
 	var clients []*ClusterClient
 	for _, kubeconfig := range kubeconfigs {
 		rawConfig, err := clientcmd.LoadFromFile(kubeconfig)
 		if err != nil {
-			return err, nil
+			return nil, err
 		}
 		currentContext := rawConfig.CurrentContext
 
 		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
-			return err, nil
+			return nil, err
 		}
 		clientset, err := kubernetes.NewForConfig(config)
 		if err != nil {
-			return err, nil
+			return nil, err
 		}
 
 		newClient := &ClusterClient{
@@ -58,7 +58,7 @@ func KubeClients(kubeconfigs []string) (error, []*ClusterClient) {
 
 		clients = append(clients, newClient)
 	}
-	return nil, clients
+	return clients, nil
 }
 
 func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
