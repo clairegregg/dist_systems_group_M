@@ -1,11 +1,17 @@
 package k8s
 
 import (
+	"cmp"
 	"context"
+	"fmt"
+	"math"
+	"slices"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 /*
@@ -17,34 +23,103 @@ Outside of this file
 
 In this file
 1. Get clients for kubernetes clusters 									v/
-2. Check each cluster for how many replicas of the server it has
-3. Bring up new cluster when requested
+2. Check each cluster for how many replicas of the server it has 		v/
+3. Bring up new cluster when requested									v/
 */
 
-func KubeClients(kubeconfigs []string) (error, []*kubernetes.Clientset) {
-	var clientsets []*kubernetes.Clientset
+type ClusterClient struct {
+	clientset *kubernetes.Clientset
+	clusterName string
+	currentCount int
+}
+
+func KubeClients(kubeconfigs []string) (error, []*ClusterClient) {
+	var clients []*ClusterClient
 	for _, kubeconfig := range kubeconfigs {
+		rawConfig, err := clientcmd.LoadFromFile(kubeconfig)
+		if err != nil {
+			return err, nil
+		}
+		currentContext := rawConfig.CurrentContext
+
 		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
 			return err, nil
 		}
-
 		clientset, err := kubernetes.NewForConfig(config)
 		if err != nil {
 			return err, nil
 		}
 
-		clientsets = append(clientsets, clientset)
+		newClient := &ClusterClient{
+			clientset: clientset,
+			clusterName: currentContext,
+		}
+
+		clients = append(clients, newClient)
 	}
-	return nil, clientsets
+	return nil, clients
 }
 
-func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (error, int) {
+func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
 	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=pacman-chunk",
 	})
 	if err != nil {
-		return err, 0
+		return 0, err
 	}
-	return nil, len(pods.Items)
+	return len(pods.Items), nil
+}
+
+func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, error) {
+	// Get count of number of chunk servers in each cluster, setting the count to MaxInt if the cluster is unreachable.
+	for _, client := range clients {
+		count, err := checkChunkCount(ctx, client.clientset)
+		if err != nil {
+			client.currentCount = count
+			fmt.Printf("Failed to get chunk server count for cluster %s: %v\n", client.clusterName, err)
+		} else {
+			client.currentCount = math.MaxInt
+		}
+	}
+
+	// Sort the clusters by the number of chunk servers they contain
+	slices.SortFunc(clients, func(a, b *ClusterClient) int {
+		return cmp.Compare(a.currentCount, b.currentCount)
+	})
+
+	// If no clusters are reachable, return an error
+	if clients[0].currentCount == math.MaxInt {
+		return "", fmt.Errorf("No clusters are reachable")
+	}
+
+	clientset := clients[0].clientset
+
+	// Add another replica to the cluster
+	scale, err := clientset.AppsV1().StatefulSets("").GetScale(ctx, "pacman-chunk", metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	scale.Spec.Replicas = scale.Spec.Replicas + 1
+	_, err = clientset.AppsV1().StatefulSets("").UpdateScale(ctx, "pacman-chunk", scale, metav1.UpdateOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	// Retrieve the name of the new chunk server/replica
+	pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=pacman-chunk",
+	})
+	podList := pods.Items
+	slices.SortFunc(podList, func(a, b corev1.Pod) int {
+		return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+	})
+	newestPod := podList[len(podList)-1]
+	
+	// Construct the url for the new pod - clustername.clairegregg.com/?id=chunkservernumber
+	// Pods are named like pacman-chunk-1
+	splitPodName := strings.Split(newestPod.Name, "-")
+	podNum := splitPodName[len(splitPodName)-1]
+
+	return fmt.Sprintf("%s.clairegregg.com/?id=%s", clients[0].clusterName, podNum), nil
 }
