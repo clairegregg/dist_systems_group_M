@@ -420,6 +420,41 @@ func addChunkToDB(ctx context.Context, x, y int, url string) error {
 	return nil
 }
 
+func initialChunkServers(ctx context.Context) error {
+	urls, err := k8s.GetCurrentChunkServerUrls(ctx, clusterClients)
+	if err != nil {
+		return err
+	}
+
+	n := 1
+	i := 0
+	var coords [][2]int
+	for i < len(urls) {
+		for m := 1; m <= n; m++ {
+			if m == n {
+				coords = append(coords, [][2]int{
+					{m, m}, {-m, m}, {m, -m}, {-m, -m},
+				}...)
+				i += 4
+			} else {
+				coords = append(coords, [][2]int{
+					{n, m}, {-n, m}, {n, -m}, {-n, -m},
+					{m, n}, {-m, n}, {m, -n}, {-m, -n},
+				}...)
+				i += 8
+			}
+		}
+	}
+
+	for i, url := range urls {
+		err := addChunkToDB(ctx, coords[i][0], coords[i][1], url)
+		if err != nil {
+			fmt.Printf("Failed to write chunk %s to DB: %v", url, err)
+		}
+	}
+	return nil
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -435,6 +470,9 @@ func main() {
 	// Create k8s clients for chunk clusters
 	kubeconfigs := strings.Split(kubeconfigPaths, ",")
 	clusterClients, err = k8s.KubeClients(kubeconfigs)
+
+	// Initialise chunk servers with coordinates
+	initialChunkServers(ctx)
 
 	// Kafka setup
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")

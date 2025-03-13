@@ -115,11 +115,36 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 		return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
 	})
 	newestPod := podList[len(podList)-1]
-	
+
+	return getChunkServerUrl(newestPod.Name, clients[0].clusterName), nil
+}
+
+func getChunkServerUrl(podName, clusterName string) string {
 	// Construct the url for the new pod - clustername.clairegregg.com/?id=chunkservernumber
 	// Pods are named like pacman-chunk-1
-	splitPodName := strings.Split(newestPod.Name, "-")
+	splitPodName := strings.Split(podName, "-")
 	podNum := splitPodName[len(splitPodName)-1]
+	return fmt.Sprintf("%s.clairegregg.com/?id=%s", clusterName, podNum)
+}
 
-	return fmt.Sprintf("%s.clairegregg.com/?id=%s", clients[0].clusterName, podNum), nil
+func GetCurrentChunkServerUrls(ctx context.Context, clients []*ClusterClient) ([]string, error){
+	var urls []string
+
+	// Search all clusters
+	for _, client := range clients {
+		clientset := client.clientset
+		// Retrieve all pods
+		pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+			LabelSelector: "app=pacman-chunk",
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		for _, pod := range pods.Items {
+			url := getChunkServerUrl(pod.Name, client.clusterName)
+			urls = append(urls, url)
+		}
+	}
+	return urls, nil
 }
