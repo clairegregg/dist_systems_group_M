@@ -1,68 +1,167 @@
-import Canvas from "./Canvas/Canvas";
+//import Canvas from "./Canvas/Canvas";
+import Maps from "./maps"
 
 function App() {
-  const draw = (context) => {
-    class Boundary {
-      constructor({position}) {
-          this.position = position
-          this.width = 40
-          this.height = 40
-      }
-  
-      draw() {
-        context.fillStyle = 'blue'
-        context.fillRect(this.position.x, this.position.y, this.width, this.height)
-      }
+  const canvas = document.querySelector('canvas')
+  const c = canvas.getContext('2d')
+
+  canvas.width = window.innerWidth
+  canvas.height = window.innerHeight
+
+  class Boundary {
+    static width = 40;
+    static height = 40;
+
+    constructor({ position }) {
+      this.position = position
+      this.width = 40
+      this.height = 40
     }
 
-    // This map layout is hardcoded for now, but I plan on making a separate JS file just for map layouts to make the code cleaner and easier to work with.
-    const map = [
-      ['1', '1', '1', '1', '1', '1', '1', '0', '0', '1', '1', '1', '1', '1', '1', '1'],
-      ['1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1'],
-      ['1', '0', '1', '1', '1', '0', '1', '1', '1', '1', '0', '1', '1', '1', '0', '1'],
-      ['1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'],
-      ['1', '0', '1', '1', '0', '1', '1', '1', '1', '1', '1', '0', '1', '1', '0', '1'],
-      ['1', '0', '1', '0', '0', '1', '0', '0', '0', '0', '1', '0', '0', '1', '0', '1'],
-      ['1', '0', '1', '0', '1', '1', '1', '1', '1', '1', '1', '1', '0', '1', '0', '1'],
-      ['0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'],
-      ['0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'],
-      ['1', '0', '1', '1', '0', '1', '1', '1', '1', '1', '1', '0', '1', '1', '0', '1'],
-      ['1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1'],
-      ['1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1'],
-      ['1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1'],
-      ['1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1'],
-      ['1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1'],
-      ['1', '1', '1', '1', '1', '1', '1', '0', '0', '1', '1', '1', '1', '1', '1', '1']
-    ]
+    draw() {
+      c.fillStyle = 'blue'
+      c.fillRect(this.position.x, this.position.y, this.width, this.height)
+    }
+  }
 
-    const boundaries = []
+  class Player {
+    constructor({ position, velocity }) {
+      this.position = position
+      this.velocity = velocity
+      this.radius = 15
+    }
 
-    // Setting the coordinates for each wall 
-    map.forEach((row, i) => {
-      row.forEach((symbol, j) => {
-        switch (symbol) {
-          case '1':
-            boundaries.push(
-              new Boundary({
-                position: {
-                  x: 40 * j,
-                  y: 40 * i
-                }
-              })
-            )
-            break
-          default:
-        }
-      })
+    draw() {
+      c.beginPath()
+      c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2)
+      c.fillStyle = 'yellow'
+      c.fill()
+      c.closePath()
+    }
+
+    update() {
+      this.draw()
+      this.position.x += this.velocity.x
+      this.position.y += this.velocity.y
+    }
+  }
+
+  const boundaries = []
+
+  const player = new Player({
+    position: {
+      x: Boundary.width * 1.5,
+      y: Boundary.height * 1.5
+    },
+    velocity: {
+      x: 0,
+      y: 0
+    }
+  })
+
+  const keys = {
+    w: {
+      pressed: false
+    },
+    a: {
+      pressed: false
+    },
+    s: {
+      pressed: false
+    },
+    d: {
+      pressed: false
+    }
+  }
+
+  let lastKey = ''
+
+  // Setting the coordinates for each wall 
+  Maps.map.forEach((row, i) => {
+    row.forEach((symbol, j) => {
+      switch (symbol) {
+        case '1':
+          boundaries.push(
+            new Boundary({
+              position: {
+                x: Boundary.width * j,
+                y: Boundary.height * i
+              }
+            })
+          )
+          break
+        default:
+      }
     })
+  })
 
-    // Drawing the walls
+  function animate() {
+    requestAnimationFrame(animate)
+    c.clearRect(0, 0, canvas.width, canvas.height)
+    console.log("animate test")
     boundaries.forEach((boundary) => {
       boundary.draw()
     })
+
+    player.update()
+    player.velocity.x = 0;
+    player.velocity.y = 0;
+
+    if (keys.w.pressed && lastKey === 'w') {
+      player.velocity.y = -5
+    } else if (keys.a.pressed && lastKey === 'a') {
+      player.velocity.x = -5
+    } else if (keys.d.pressed && lastKey === 'd') {
+      player.velocity.x = 5
+    } else if (keys.s.pressed && lastKey === 's') {
+      player.velocity.y = 5
+    }
   }
 
-  return <Canvas draw={draw}/>
+  animate()
+
+  // Drawing the walls
+
+  window.addEventListener('keydown', ({ key }) => {
+    switch (key) {
+      case 'w':
+        keys.w.pressed = true
+        lastKey = 'w'
+        break
+      case 'a':
+        keys.a.pressed = true
+        lastKey = 'a'
+        break
+      case 's':
+        keys.s.pressed = true
+        lastKey = 's'
+        break
+      case 'd':
+        keys.d.pressed = true
+        lastKey = 'd'
+        break
+      default:
+    }
+    console.log(player.velocity)
+  })
+  window.addEventListener('keyup', ({ key }) => {
+    switch (key) {
+      case 'w':
+        keys.w.pressed = false
+        break
+      case 'a':
+        keys.a.pressed = false
+        break
+      case 's':
+        keys.s.pressed = false
+        break
+      case 'd':
+        keys.d.pressed = false
+        break
+      default:
+    }
+    console.log(player.velocity)
+  })
 }
 
 export default App;
