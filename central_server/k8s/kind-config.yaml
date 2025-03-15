@@ -1,0 +1,21 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: central
+networking:
+  apiServerAddress: "0.0.0.0"
+  apiServerPort: 6443
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: /etc/hosts
+        containerPath: /etc/hosts
+    kubeadmConfigPatches:
+      - |
+        apiVersion: kubeadm.k8s.io/v1beta3
+        kind: ClusterConfiguration
+        apiServer:
+          certSANs:
+            - "server.clairegregg.com"
+            - "127.0.0.1"
+            - "0.0.0.0"
+            - "localhost"
