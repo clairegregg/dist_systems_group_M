@@ -6,9 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Cormuckle/dist_systems_group_M/central_server/k8s"
@@ -70,11 +68,11 @@ type CreateUserResponse struct {
 	} `json:"spawnCoordinates"`
 }
 
-type GetChunkServerRequest struct {
+type GetRandomChunkServerRequest struct {
 	UserName string `json:"userName" binding:"required"`
 }
 
-type GetChunkServerResponse struct {
+type GetRandomChunkServerResponse struct {
 	ChunkServerAddress string `json:"chunkServerAddress"`
 	TileCoordinates    struct {
 		X int `json:"x"`
@@ -83,12 +81,14 @@ type GetChunkServerResponse struct {
 }
 
 type NewChunkServerRequest struct {
-	Quadrant string `json:"quadrant" binding:"required"`
+	ChunkCoordinates struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	} `json:"chunkCoordinates"`
 }
 
 type NewChunkServerResponse struct {
 	ChunkServerAddress string `json:"chunkServerAddress"`
-	Status             string `json:"status"`
 }
 
 type UpdateScoreRequest struct {
@@ -259,6 +259,28 @@ func setupRouter() *gin.Engine {
 			})
 		}
 		c.JSON(http.StatusOK, leaderboard)
+	})
+
+	// GET endpoint to find a chunk server at specific chunk coordinates
+	// May require bringing up a new chunk server
+	r.GET("/get-chunk-server", func(c *gin.Context) {
+		var req NewChunkServerRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		url, err := getChunk(c, req.ChunkCoordinates.X, req.ChunkCoordinates.Y)
+		if err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error, failed to find chunk server %v, %v: %w", req.ChunkCoordinates.X, req.ChunkCoordinates.Y, err).Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, NewChunkServerResponse{
+			ChunkServerAddress: url,
+		})
 	})
 
 	// Send a broadcast message to all chunk servers
@@ -474,41 +496,43 @@ func main() {
 	// Initialise chunk servers with coordinates
 	initialChunkServers(ctx)
 
-	// Kafka setup
-	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
-	if kafkaBroker == "" {
-		kafkaBroker = "kafka:9092"
-	}
+	/*
+		// Kafka setup
+		kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
+		if kafkaBroker == "" {
+			kafkaBroker = "kafka:9092"
+		}
 
-	// Initialize Kafka Producer
-	kafkaProducer, err = kafka.NewProducer([]string{kafkaBroker})
-	if err != nil {
-		log.Fatalf("Failed to initialize Kafka producer: %v", err)
-	}
+		// Initialize Kafka Producer
+		kafkaProducer, err = kafka.NewProducer([]string{kafkaBroker})
+		if err != nil {
+			log.Fatalf("Failed to initialize Kafka producer: %v", err)
+		}
 
-	// Initialize Kafka Consumer
-	kafkaConsumer, err = kafka.NewConsumer([]string{kafkaBroker}, "central-server-group")
-	if err != nil {
-		log.Fatalf("Failed to initialize Kafka consumer: %v", err)
-	}
+		// Initialize Kafka Consumer
+		kafkaConsumer, err = kafka.NewConsumer([]string{kafkaBroker}, "central-server-group")
+		if err != nil {
+			log.Fatalf("Failed to initialize Kafka consumer: %v", err)
+		}
 
-	// Start consuming messages from chunk servers
-	go consumeChunkMessages(ctx)
+		// Start consuming messages from chunk servers
+		go consumeChunkMessages(ctx)
 
-	// Graceful shutdown handling
-	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-		<-sigChan
-		log.Println("Shutting down Central Server...")
+		// Graceful shutdown handling
+		go func() {
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+			<-sigChan
+			log.Println("Shutting down Central Server...")
 
-		// Cleanup Kafka connections
-		kafkaProducer.Close()
-		kafkaConsumer.Close()
+			// Cleanup Kafka connections
+			kafkaProducer.Close()
+			kafkaConsumer.Close()
 
-		cancel()
-		os.Exit(0)
-	}()
+			cancel()
+			os.Exit(0)
+		}()
+	*/
 
 	// Start HTTP server
 	r := setupRouter()
