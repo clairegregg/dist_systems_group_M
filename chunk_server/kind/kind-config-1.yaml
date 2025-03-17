@@ -16,6 +16,7 @@ nodes:
         apiServer:
           certSANs:
             - "server.clairegregg.com"
+            - "chunk1.clairegregg.com"
             - "127.0.0.1"
             - "0.0.0.0"
             - "localhost"
