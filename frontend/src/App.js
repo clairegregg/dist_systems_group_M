@@ -1,209 +1,167 @@
+//import Canvas from "./Canvas/Canvas";
+import Maps from "./maps"
+
 function App() {
-  const canvas = document.querySelector('canvas');
-  const context = canvas.getContext('2d');
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  const canvas = document.querySelector('canvas')
+  const c = canvas.getContext('2d')
 
-  // Configuration constants
-  const MOVEMENT_SPEED = 5;
-  const BOUNDARY_SIZE = 40;
-  const PLAYER_RADIUS = 15;
-
-  // --- Class Definitions ---
+  canvas.width = window.innerWidth
+  canvas.height = window.innerHeight
 
   class Boundary {
-    static width = BOUNDARY_SIZE;
-    static height = BOUNDARY_SIZE;
+    static width = 40;
+    static height = 40;
 
     constructor({ position }) {
-      this.position = position;
-      this.width = BOUNDARY_SIZE;
-      this.height = BOUNDARY_SIZE;
+      this.position = position
+      this.width = 40
+      this.height = 40
     }
 
     draw() {
-      context.fillStyle = 'blue';
-      context.fillRect(this.position.x, this.position.y, this.width, this.height);
+      c.fillStyle = 'blue'
+      c.fillRect(this.position.x, this.position.y, this.width, this.height)
     }
   }
 
   class Player {
-    constructor({ id, position, velocity }) {
-      this.id = id;
-      this.position = position;
-      this.velocity = velocity;
-      this.radius = PLAYER_RADIUS;
+    constructor({ position, velocity }) {
+      this.position = position
+      this.velocity = velocity
+      this.radius = 15
     }
 
     draw() {
-      context.beginPath();
-      context.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
-      context.fillStyle = this.isLocal ? 'yellow' : 'red';
-      context.fill();
-      context.closePath();
+      c.beginPath()
+      c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2)
+      c.fillStyle = 'yellow'
+      c.fill()
+      c.closePath()
     }
 
     update() {
-      this.draw();
-      this.position.x += this.velocity.x;
-      this.position.y += this.velocity.y;
+      this.draw()
+      this.position.x += this.velocity.x
+      this.position.y += this.velocity.y
     }
   }
 
-  // --- Setup Boundaries from Map Data fetched from server ---
-  const boundaries = [];
+  const boundaries = []
 
-  async function loadMap() {
-    try {
-      // Adjust the URL as needed; if same-origin, '/getMap' is enough.
-      const response = await fetch('http://localhost:8082/getMap');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const mapData = await response.json();
-      mapData.forEach((row, rowIndex) => {
-        row.forEach((symbol, colIndex) => {
-          if (symbol === '1') {
-            boundaries.push(
-              new Boundary({
-                position: {
-                  x: Boundary.width * colIndex,
-                  y: Boundary.height * rowIndex,
-                },
-              })
-            );
-          }
-        });
-      });
-    } catch (error) {
-      console.error("Error fetching map data:", error);
-    }
-  }
-
-  // --- Player Hashmap ---
-  const players = new Map();
-
-  // Generate a unique id for the local player.
-  const localPlayerId =
-    Date.now().toString() + Math.random().toString(36).substring(2);
-  const localPlayer = new Player({
-    id: localPlayerId,
+  const player = new Player({
     position: {
       x: Boundary.width * 1.5,
-      y: Boundary.height * 1.5,
+      y: Boundary.height * 1.5
     },
-    velocity: { x: 0, y: 0 },
-  });
-  localPlayer.isLocal = true;
-  players.set(localPlayerId, localPlayer);
-
-  // --- WebSocket Setup ---
-  // Replace with your actual WebSocket server address.
-  const socket = new WebSocket("ws://localhost:8082/ws");
-
-  socket.addEventListener("open", () => {
-    console.log("WebSocket connection established");
-    socket.send(JSON.stringify({ type: "new_player", id: localPlayerId }));
-  });
-
-  socket.addEventListener("message", (event) => {
-    const data = JSON.parse(event.data);
-    if (data.players) {
-      const activePlayerIds = new Set(Object.keys(data.players));
-      players.forEach((player, playerId) => {
-        if (playerId !== localPlayerId && !activePlayerIds.has(playerId)) {
-          players.delete(playerId);
-        }
-      });
-
-      // Update or add remote players.
-      Object.keys(data.players).forEach((playerId) => {
-        if (playerId === localPlayerId) return;
-        const playerData = data.players[playerId];
-        if (players.has(playerId)) {
-          const remotePlayer = players.get(playerId);
-          remotePlayer.position = playerData.position;
-          remotePlayer.velocity = playerData.velocity;
-        } else {
-          const newPlayer = new Player({
-            id: playerId,
-            position: playerData.position,
-            velocity: playerData.velocity,
-          });
-          newPlayer.isLocal = false;
-          players.set(playerId, newPlayer);
-        }
-      });
+    velocity: {
+      x: 0,
+      y: 0
     }
-  });
+  })
 
-  // --- Key Tracking ---
   const keys = {
-    w: { pressed: false },
-    a: { pressed: false },
-    s: { pressed: false },
-    d: { pressed: false },
-  };
-  let lastKey = "";
-
-  window.addEventListener("keydown", ({ key }) => {
-    if (keys[key] !== undefined) {
-      keys[key].pressed = true;
-      lastKey = key;
+    w: {
+      pressed: false
+    },
+    a: {
+      pressed: false
+    },
+    s: {
+      pressed: false
+    },
+    d: {
+      pressed: false
     }
-  });
+  }
 
-  window.addEventListener("keyup", ({ key }) => {
-    if (keys[key] !== undefined) {
-      keys[key].pressed = false;
-    }
-  });
+  let lastKey = ''
 
-  // --- Animation Loop ---
-  function animate() {
-    requestAnimationFrame(animate);
-    context.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Draw boundaries.
-    boundaries.forEach((boundary) => boundary.draw());
-
-    // Update and render each player.
-    players.forEach((player, id) => {
-      if (id === localPlayerId) {
-        player.velocity.x = 0;
-        player.velocity.y = 0;
-        if (keys.w.pressed && lastKey === "w") {
-          player.velocity.y = -MOVEMENT_SPEED;
-        } else if (keys.a.pressed && lastKey === "a") {
-          player.velocity.x = -MOVEMENT_SPEED;
-        } else if (keys.d.pressed && lastKey === "d") {
-          player.velocity.x = MOVEMENT_SPEED;
-        } else if (keys.s.pressed && lastKey === "s") {
-          player.velocity.y = MOVEMENT_SPEED;
-        }
-
-        player.update();
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(
-            JSON.stringify({
-              id: localPlayerId,
-              position: player.position,
-              velocity: player.velocity,
+  // Setting the coordinates for each wall 
+  Maps.map.forEach((row, i) => {
+    row.forEach((symbol, j) => {
+      switch (symbol) {
+        case '1':
+          boundaries.push(
+            new Boundary({
+              position: {
+                x: Boundary.width * j,
+                y: Boundary.height * i
+              }
             })
-          );
-        }
-      } else {
-        player.update();
+          )
+          break
+        default:
       }
-    });
+    })
+  })
+
+  function animate() {
+    requestAnimationFrame(animate)
+    c.clearRect(0, 0, canvas.width, canvas.height)
+    console.log("animate test")
+    boundaries.forEach((boundary) => {
+      boundary.draw()
+    })
+
+    player.update()
+    player.velocity.x = 0;
+    player.velocity.y = 0;
+
+    if (keys.w.pressed && lastKey === 'w') {
+      player.velocity.y = -5
+    } else if (keys.a.pressed && lastKey === 'a') {
+      player.velocity.x = -5
+    } else if (keys.d.pressed && lastKey === 'd') {
+      player.velocity.x = 5
+    } else if (keys.s.pressed && lastKey === 's') {
+      player.velocity.y = 5
+    }
   }
 
-  // Initialize by loading the map first, then start the animation loop.
-  async function init() {
-    await loadMap();
-    animate();
-  }
-  init();
+  animate()
+
+  // Drawing the walls
+
+  window.addEventListener('keydown', ({ key }) => {
+    switch (key) {
+      case 'w':
+        keys.w.pressed = true
+        lastKey = 'w'
+        break
+      case 'a':
+        keys.a.pressed = true
+        lastKey = 'a'
+        break
+      case 's':
+        keys.s.pressed = true
+        lastKey = 's'
+        break
+      case 'd':
+        keys.d.pressed = true
+        lastKey = 'd'
+        break
+      default:
+    }
+    console.log(player.velocity)
+  })
+  window.addEventListener('keyup', ({ key }) => {
+    switch (key) {
+      case 'w':
+        keys.w.pressed = false
+        break
+      case 'a':
+        keys.a.pressed = false
+        break
+      case 's':
+        keys.s.pressed = false
+        break
+      case 'd':
+        keys.d.pressed = false
+        break
+      default:
+    }
+    console.log(player.velocity)
+  })
 }
 
 export default App;
