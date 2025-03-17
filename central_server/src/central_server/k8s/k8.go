@@ -64,10 +64,10 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	for _, client := range clients {
 		count, err := checkChunkCount(ctx, client.clientset)
 		if err != nil {
-			client.currentCount = count
+			client.currentCount = math.MaxInt
 			fmt.Printf("Failed to get chunk server count for cluster %s: %v\n", client.clusterName, err)
 		} else {
-			client.currentCount = math.MaxInt
+			client.currentCount = count
 		}
 	}
 
@@ -112,7 +112,7 @@ func getChunkServerUrl(podName, clusterName string) string {
 	// Pods are named like pacman-chunk-1
 	splitPodName := strings.Split(podName, "-")
 	podNum := splitPodName[len(splitPodName)-1]
-	return fmt.Sprintf("%s.clairegregg.com/?id=%s", clusterName, podNum)
+	return fmt.Sprintf("%s.clairegregg.com/?id=%s", strings.ReplaceAll(clusterName, "kind-", ""), podNum)
 }
 
 func GetCurrentChunkServerUrls(ctx context.Context, clients []*ClusterClient) ([]string, error){
