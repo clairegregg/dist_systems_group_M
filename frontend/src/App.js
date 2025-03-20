@@ -6,6 +6,8 @@ function App() {
   const canvas = document.querySelector('canvas')
   const c = canvas.getContext('2d')
 
+  const scoreEl = document.querySelector('#scoreEl')
+
   // Setting the width and height of the canvas to match the window sizes
   canvas.width = window.innerWidth
   canvas.height = window.innerHeight
@@ -54,6 +56,24 @@ function App() {
     }
   }
 
+  // Pellet class, used for representing the collectable pellets within the game
+  class Pellet {
+    constructor({ position, velocity }) {
+      this.position = position
+      this.radius = 3
+    }
+
+    // Draw function for pellet, this displays the pellets as a cirlce
+    draw() {
+      c.beginPath()
+      c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2)
+      c.fillStyle = 'white'
+      c.fill()
+      c.closePath()
+    }
+  }
+
+  const pellets = []
   const boundaries = []
 
   // Creating the player instance
@@ -84,6 +104,7 @@ function App() {
     }
   }
 
+  let score = 0
   let lastKey = ''
 
   // Using maps from the maps.js file to create the level layout
@@ -96,6 +117,16 @@ function App() {
               position: {
                 x: Boundary.width * j,
                 y: Boundary.height * i
+              }
+            })
+          )
+          break
+        case '0':
+          pellets.push(
+            new Pellet({
+              position: {
+                x: Boundary.width * j + Boundary.width/2,
+                y: Boundary.height * i + Boundary.height/2
               }
             })
           )
@@ -116,17 +147,19 @@ function App() {
   // Animates movement of the player and tracks updates for the player and the level
   function animate() {
     requestAnimationFrame(animate)
-    c.clearRect(0, 0, canvas.width, canvas.height)  
+    c.clearRect(0, 0, canvas.width, canvas.height)
 
     // Using collision detection for continuous and smooth movement of the player
     if (keys.w.pressed && lastKey === 'w') {
       for (let i = 0; i < boundaries.length; i++) {
         const boundary = boundaries[i]
         if (collisionDetection({
-          player: {...player, velocity: {
-            x: 0,
-            y: -5
-          }},
+          player: {
+            ...player, velocity: {
+              x: 0,
+              y: -5
+            }
+          },
           boundary: boundary
         })) {
           player.velocity.y = 0
@@ -139,10 +172,12 @@ function App() {
       for (let i = 0; i < boundaries.length; i++) {
         const boundary = boundaries[i]
         if (collisionDetection({
-          player: {...player, velocity: {
-            x: -5,
-            y: 0
-          }},
+          player: {
+            ...player, velocity: {
+              x: -5,
+              y: 0
+            }
+          },
           boundary: boundary
         })) {
           player.velocity.x = 0
@@ -155,10 +190,12 @@ function App() {
       for (let i = 0; i < boundaries.length; i++) {
         const boundary = boundaries[i]
         if (collisionDetection({
-          player: {...player, velocity: {
-            x: 5,
-            y: 0
-          }},
+          player: {
+            ...player, velocity: {
+              x: 5,
+              y: 0
+            }
+          },
           boundary: boundary
         })) {
           player.velocity.x = 0
@@ -171,10 +208,12 @@ function App() {
       for (let i = 0; i < boundaries.length; i++) {
         const boundary = boundaries[i]
         if (collisionDetection({
-          player: {...player, velocity: {
-            x: 0,
-            y: 5
-          }},
+          player: {
+            ...player, velocity: {
+              x: 0,
+              y: 5
+            }
+          },
           boundary: boundary
         })) {
           player.velocity.y = 0
@@ -185,10 +224,22 @@ function App() {
       }
     }
 
+    // Pellet collision
+    for (let i = pellets.length - 1; 0 < i; i--) {
+      const pellet = pellets[i]
+      pellet.draw()
+
+      if (Math.hypot(pellet.position.x - player.position.x,
+        pellet.position.y - player.position.y) < pellet.radius + player.radius) {
+        pellets.splice(i, 1)
+        score += 10
+        scoreEl.innerHTML = score
+      }
+    }
     // Draw each boundary object as a wall
     boundaries.forEach((boundary) => {
       boundary.draw()
-      if (collisionDetection({player, boundary})) {
+      if (collisionDetection({ player, boundary })) {
         //console.log('Collision')
         player.velocity.x = 0;
         player.velocity.y = 0;
