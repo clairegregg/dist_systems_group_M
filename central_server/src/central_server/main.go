@@ -49,9 +49,9 @@ func connectToDB(ctx context.Context) (*mongo.Client, error) {
 
 // MongoDB Data Types
 type Chunk struct {
-	x   int
-	y   int
-	url string
+	x   int    `bson:"x"`
+	y   int    `bson:"y"`
+	url string `bson:"url"`
 }
 
 // Request/Response models
