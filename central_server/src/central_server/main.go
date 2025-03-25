@@ -476,6 +476,7 @@ func initialChunkServers(ctx context.Context) error {
 				i += 8
 			}
 		}
+		n++
 	}
 
 	for i, url := range urls {
