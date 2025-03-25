@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +58,45 @@ func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (int,
 		return 0, err
 	}
 	return len(pods.Items), nil
+}
+
+func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, url string) error {
+	clusterName := strings.Split(url, ".")[0] // Extract just (EG) chunk1 from chunk1.clairegregg.com/?id=1
+	chunkId := strings.Split(url, "=")[1]
+	podName := "pacman-chunk-"+chunkId
+
+	// Get correct cluster client
+	var clientset *kubernetes.Clientset
+	for _, client  := range clients {
+		if client.clusterName == clusterName {
+			clientset = client.clientset
+			break
+		}
+	}
+	if clientset == nil {
+		return fmt.Errorf("no clients match cluster name %v", clusterName)
+	}
+
+	// Set the pod serving the server to have the lowest deletion cost, meaning it should be deleted first
+	server, err := clientset.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	ann := server.GetAnnotations()
+	ann["controller.kubernetes.io/pod-deletion-cost"] = strconv.Itoa(math.MinInt) // Deletion cost is 0 by default, so min int should be fine!
+	server.SetAnnotations(ann)
+
+	// Decrease number of replicas
+	scale, err := clientset.AppsV1().StatefulSets("default").GetScale(ctx, "pacman-chunk", metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	scale.Spec.Replicas = scale.Spec.Replicas - 1
+	_, err = clientset.AppsV1().StatefulSets("default").UpdateScale(ctx, "pacman-chunk", scale, metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, error) {

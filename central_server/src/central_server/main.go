@@ -92,6 +92,14 @@ type NewChunkServerResponse struct {
 	ChunkServerAddress string `json:"chunkServerAddress"`
 }
 
+type DeleteChunkServerRequest struct {
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	TileCoordinates    struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	} `json:"tileCoordinates"`
+}
+
 type UpdateScoreRequest struct {
 	UserName string `json:"userName" binding:"required"`
 	Score    int    `json:"score" binding:"required"`
@@ -284,6 +292,17 @@ func setupRouter() *gin.Engine {
 		})
 	})
 
+	// Temporary DELETE request to bring down a chunk server.
+	// Should be replaced with communication from Kafka when a chunk should be brought down.
+	r.DELETE("/delete-chunk-server", func(c *gin.Context) {
+		var req DeleteChunkServerRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	})
+
 	// Send a broadcast message to all chunk servers
 	// This is just for tesing purpose but we can use this function iternally to communicate
 	/*
@@ -394,6 +413,34 @@ func consumeChunkMessages(ctx context.Context) {
 		}
 		log.Printf("Received message from chunk server: %s\n", message)
 	}
+}
+
+func deleteChunk(ctx context.Context, x, y int, url string) error {
+	collection := client.Database("game").Collection("chunks")
+	ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// Check if the chunk server actually exists
+	cursor, err := collection.Find(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}, {Key: "url", Value: url}})
+	if err != nil {
+		return err
+	}
+	var results []Chunk
+	if err = cursor.All(ctxC, &results); err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		return fmt.Errorf("a chunk server does not exist with coordinates (%v,%v) and url %v, so it cannot be deleted.", x, y, url)
+	}
+
+	// Delete the chunk server from records
+	_, err = collection.DeleteOne(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}, {Key: "url", Value: url}})
+	if err != nil {
+		return err
+	}
+
+	// Turn the chunk server down
+	return k8s.DeleteChunkServer(ctx, clusterClients, x, y, url)
 }
 
 func getChunk(ctx context.Context, x, y int) (string, error) {
