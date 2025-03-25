@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"slices"
 	"strconv"
@@ -68,7 +69,8 @@ func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, 
 	// Get correct cluster client
 	var clientset *kubernetes.Clientset
 	for _, client  := range clients {
-		if client.clusterName == clusterName {
+		log.Printf("Cluster name is %v", client.clusterName)
+		if (client.clusterName == clusterName) || (client.clusterName == "kind-"+clusterName) {
 			clientset = client.clientset
 			break
 		}
@@ -83,7 +85,11 @@ func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, 
 		return err
 	}
 	ann := server.GetAnnotations()
-	ann["controller.kubernetes.io/pod-deletion-cost"] = strconv.Itoa(math.MinInt) // Deletion cost is 0 by default, so min int should be fine!
+	if ann == nil {
+		ann = map[string]string{"controller.kubernetes.io/pod-deletion-cost": strconv.Itoa(math.MinInt)}
+	} else {
+		ann["controller.kubernetes.io/pod-deletion-cost"] = strconv.Itoa(math.MinInt) // Deletion cost is 0 by default, so min int should be fine!
+	}
 	server.SetAnnotations(ann)
 
 	// Decrease number of replicas
