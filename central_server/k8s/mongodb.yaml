@@ -10,6 +10,16 @@ spec:
       storage: 250Mi
 ---
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-init-script
+data:
+  init.js: |
+    db = db.getSiblingDB("game");
+    db.createCollection("chunk");
+    db.createCollection("users");
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: mongodb
@@ -43,6 +53,8 @@ spec:
           volumeMounts:
             - name: mongodb-storage
               mountPath: /data/db
+            - name: init-script
+              mountPath: /docker-entrypoint-initdb.d
           env:
             - name: MONGO_INITDB_ROOT_USERNAME
               value: "admin"
@@ -52,3 +64,9 @@ spec:
         - name: mongodb-storage
           persistentVolumeClaim:
             claimName: mongodb-pvc
+        - name: init-script
+          configMap:
+            name: mongodb-init-script
+            items:
+              - key: init.js
+                path: init.js

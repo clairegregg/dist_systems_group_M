@@ -413,7 +413,11 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 
 	if len(results) == 0 {
 		if len(clusterClients) == 0 {
+			log.Printf("No clusterclients currently - kubeconfigs are %v", kubeconfigs)
 			clusterClients, err = k8s.KubeClients(kubeconfigs)
+			if err != nil {
+				return "", err
+			}
 		}
 		url, err := k8s.NewChunkServer(ctx, clusterClients)
 		if err != nil {
@@ -496,6 +500,9 @@ func main() {
 	// Create k8s clients for chunk clusters
 	kubeconfigs = strings.Split(kubeconfigPaths, ",")
 	clusterClients, err = k8s.KubeClients(kubeconfigs)
+	if err != nil {
+		log.Fatalf("Error connecting to cluster clients: %v", err)
+	}
 
 	// Initialise chunk servers with coordinates
 	initialChunkServers(ctx)
