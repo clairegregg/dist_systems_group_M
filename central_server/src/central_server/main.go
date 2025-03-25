@@ -94,10 +94,10 @@ type NewChunkServerResponse struct {
 
 type DeleteChunkServerRequest struct {
 	ChunkServerAddress string `json:"chunkServerAddress"`
-	TileCoordinates    struct {
+	ChunkCoordinates    struct {
 		X int `json:"x"`
 		Y int `json:"y"`
-	} `json:"tileCoordinates"`
+	} `json:"chunkCoordinates"`
 }
 
 type UpdateScoreRequest struct {
@@ -299,6 +299,13 @@ func setupRouter() *gin.Engine {
 		if err := c.ShouldBindJSON(&req); err != nil {
 			fmt.Print(err.Error())
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		err := deleteChunk(c, req.ChunkCoordinates.X, req.ChunkCoordinates.Y, req.ChunkServerAddress)
+		if err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error, failed to delete chunk server %v, %v: %w", req.ChunkCoordinates.X, req.ChunkCoordinates.Y, err).Error()})
 			return
 		}
 	})
