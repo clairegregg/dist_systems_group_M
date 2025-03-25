@@ -49,9 +49,9 @@ func connectToDB(ctx context.Context) (*mongo.Client, error) {
 
 // MongoDB Data Types
 type Chunk struct {
-	x   int    `bson:"x"`
-	y   int    `bson:"y"`
-	url string `bson:"url"`
+	X   int    `bson:"x"`
+	Y   int    `bson:"y"`
+	Url string `bson:"url"`
 }
 
 // Request/Response models
@@ -410,6 +410,7 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 		return "", err
 	}
 	defer cursor.Close(ctx)
+	log.Printf("Chunk results from DB are %v", results)
 
 	if len(results) == 0 {
 		if len(clusterClients) == 0 {
@@ -430,7 +431,7 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 		return url, nil
 	}
 	chunk := results[0]
-	return chunk.url, nil
+	return chunk.Url, nil
 }
 
 func addChunkToDB(ctx context.Context, x, y int, url string) error {
@@ -439,10 +440,11 @@ func addChunkToDB(ctx context.Context, x, y int, url string) error {
 	defer cancel()
 	// Add chunk to DB
 	chunk := Chunk{
-		x:   x,
-		y:   y,
-		url: url,
+		X:   x,
+		Y:   y,
+		Url: url,
 	}
+	log.Printf("Writing this chunk to DB: %v", chunk)
 	_, err := collection.InsertOne(ctx, chunk)
 	if err != nil {
 		return err
