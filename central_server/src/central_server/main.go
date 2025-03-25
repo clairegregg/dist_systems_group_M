@@ -21,6 +21,7 @@ var (
 	client          *mongo.Client
 	mongoURI        = os.Getenv("MONGO_URI")
 	kubeconfigPaths = os.Getenv("KUBECONFIGS")
+	kubeconfigs     []string
 	db              = make(map[string]string)
 	kafkaProducer   *kafka.Producer
 	kafkaConsumer   *kafka.Consumer
@@ -411,6 +412,9 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 	defer cursor.Close(ctx)
 
 	if len(results) == 0 {
+		if len(clusterClients) == 0 {
+			clusterClients, err = k8s.KubeClients(kubeconfigs)
+		}
 		url, err := k8s.NewChunkServer(ctx, clusterClients)
 		if err != nil {
 			return "", err
@@ -490,7 +494,7 @@ func main() {
 	defer client.Disconnect(ctx)
 
 	// Create k8s clients for chunk clusters
-	kubeconfigs := strings.Split(kubeconfigPaths, ",")
+	kubeconfigs = strings.Split(kubeconfigPaths, ",")
 	clusterClients, err = k8s.KubeClients(kubeconfigs)
 
 	// Initialise chunk servers with coordinates
