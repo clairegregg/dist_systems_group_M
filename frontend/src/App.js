@@ -1,260 +1,295 @@
+import React, { useEffect, useRef } from "react";
+
 function App() {
-  const canvas = document.querySelector('canvas');
-  const context = canvas.getContext('2d');
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-
-  // Configuration constants
-  const MOVEMENT_SPEED = 10;
-  const BOUNDARY_SIZE = 40;
-  const PLAYER_RADIUS = 12;
-
-  // --- Class Definitions ---
-
-  class Boundary {
-    static width = BOUNDARY_SIZE;
-    static height = BOUNDARY_SIZE;
-
-    constructor({ position }) {
-      this.position = position;
-      this.width = BOUNDARY_SIZE;
-      this.height = BOUNDARY_SIZE;
-    }
-
-    draw() {
-      context.fillStyle = 'blue';
-      context.fillRect(this.position.x, this.position.y, this.width, this.height);
-    }
-  }
-
-  class Player {
-    constructor({ id, position, velocity }) {
-      this.id = id;
-      this.position = position;
-      this.velocity = velocity;
-      this.radius = PLAYER_RADIUS;
-    }
-
-    draw() {
-      context.beginPath();
-      context.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
-      context.fillStyle = this.isLocal ? 'yellow' : 'red';
-      context.fill();
-      context.closePath();
-    }
-
-    update() {
-      this.draw();
-      this.position.x += this.velocity.x;
-      this.position.y += this.velocity.y;
-    }
-  }
-
-  // --- Setup Boundaries from Map Data fetched from server ---
-  const boundaries = [];
-
-  async function loadMap() {
-    try {
-      // Adjust the URL as needed; if same-origin, '/getMap' is enough.
-      const response = await fetch('http://10.6.49.72:8082/getMap');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const mapData = await response.json();
-      mapData.forEach((row, rowIndex) => {
-        row.forEach((symbol, colIndex) => {
-          if (symbol === '1') {
-            boundaries.push(
-              new Boundary({
-                position: {
-                  x: Boundary.width * colIndex,
-                  y: Boundary.height * rowIndex,
-                },
-              })
-            );
-          }
-        });
-      });
-    } catch (error) {
-      console.error("Error fetching map data:", error);
-    }
-  }
-
-  // --- Player Hashmap ---
-  const players = new Map();
-
-  // Generate a unique id for the local player.
-  const localPlayerId =
-    Date.now().toString() + Math.random().toString(36).substring(2);
-  const localPlayer = new Player({
-    id: localPlayerId,
-    position: {
-      x: Boundary.width * 1.5,
-      y: Boundary.height * 1.5,
-    },
-    velocity: { x: 0, y: 0 },
-  });
-  localPlayer.isLocal = true;
-  players.set(localPlayerId, localPlayer);
-
-  // --- WebSocket Setup ---
-  // Replace with your actual WebSocket server address.
-  const socket = new WebSocket("ws://10.6.49.72:8082/ws");
-
-  socket.addEventListener("open", () => {
-    console.log("WebSocket connection established");
-    socket.send(JSON.stringify({ type: "new_player", id: localPlayerId }));
-  });
-
-  socket.addEventListener("message", (event) => {
-    const data = JSON.parse(event.data);
-    if (data.players) {
-      const activePlayerIds = new Set(Object.keys(data.players));
-      players.forEach((player, playerId) => {
-        if (playerId !== localPlayerId && !activePlayerIds.has(playerId)) {
-          players.delete(playerId);
-        }
-      });
-
-      // Update or add remote players.
-      Object.keys(data.players).forEach((playerId) => {
-        if (playerId === localPlayerId) return;
-        const playerData = data.players[playerId];
-        if (players.has(playerId)) {
-          const remotePlayer = players.get(playerId);
-          remotePlayer.position = playerData.position;
-          remotePlayer.velocity = playerData.velocity;
-        } else {
-          const newPlayer = new Player({
-            id: playerId,
-            position: playerData.position,
-            velocity: playerData.velocity,
-          });
-          newPlayer.isLocal = false;
-          players.set(playerId, newPlayer);
-        }
-      });
-    }
-  });
-
-  // --- Key Tracking ---
-  const keys = {
-    w: { pressed: false },
-    a: { pressed: false },
-    s: { pressed: false },
-    d: { pressed: false },
-  };
-  let lastKey = "";
-
-  window.addEventListener("keydown", ({ key }) => {
-    if (keys[key] !== undefined) {
-      keys[key].pressed = true;
-      lastKey = key;
-    }
-  });
-
-  window.addEventListener("keyup", ({ key }) => {
-    if (keys[key] !== undefined) {
-      keys[key].pressed = false;
-    }
-  });
-
-
-  // Optimized collision detection that accepts an intended velocity.
-function collisionDetection({ player, boundary, velocity }) {
-  const vx = velocity ? velocity.x : player.velocity.x;
-  const vy = velocity ? velocity.y : player.velocity.y;
-  return (
-    player.position.y - player.radius + vy <= boundary.position.y + boundary.height &&
-    player.position.x + player.radius + vx >= boundary.position.x &&
-    player.position.y + player.radius + vy >= boundary.position.y &&
-    player.position.x - player.radius + vx <= boundary.position.x + boundary.width
+  const canvasRef = useRef(null);
+  const scoreElRef = useRef(null);
+  const localPlayerIdRef = useRef(
+    Date.now().toString() + Math.random().toString(36).substring(2)
   );
-}
 
-function animate() {
-  requestAnimationFrame(animate);
-  context.clearRect(0, 0, canvas.width, canvas.height);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const scoreEl = scoreElRef.current;
+    const c = canvas.getContext("2d");
 
-  // Process local player's input and collisions only.
-  players.forEach((player) => {
-    console.log(player.id,player.isLocal)
-    if (player.isLocal) {
-      // Determine intended velocity based on key input.
-      let intendedVX = 0;
-      let intendedVY = 0;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
 
-      if (keys.w.pressed && lastKey === "w") {
-        intendedVY = -MOVEMENT_SPEED;
-      } else if (keys.s.pressed && lastKey === "s") {
-        intendedVY = MOVEMENT_SPEED;
+    class Boundary {
+      static width = 40;
+      static height = 40;
+      constructor({ position }) {
+        this.position = position;
+        this.width = 40;
+        this.height = 40;
       }
-
-      if (keys.a.pressed && lastKey === "a") {
-        intendedVX = -MOVEMENT_SPEED;
-      } else if (keys.d.pressed && lastKey === "d") {
-        intendedVX = MOVEMENT_SPEED;
+      draw() {
+        c.fillStyle = "blue";
+        c.fillRect(this.position.x, this.position.y, this.width, this.height);
       }
-
-      // Check for vertical collisions.
-      for (let i = 0; i < boundaries.length; i++) {
-        if (
-          collisionDetection({
-            player: player,
-            boundary: boundaries[i],
-            velocity: { x: 0, y: intendedVY },
-          })
-        ) {
-          intendedVY = 0;
-          break;
-        }
-      }
-
-      // Check for horizontal collisions.
-      for (let i = 0; i < boundaries.length; i++) {
-        if (
-          collisionDetection({
-            player: player,
-            boundary: boundaries[i],
-            velocity: { x: intendedVX, y: 0 },
-          })
-        ) {
-          intendedVX = 0;
-          break;
-        }
-      }
-
-      player.velocity.x = intendedVX;
-      player.velocity.y = intendedVY;
     }
-  });
 
-  // Draw all boundaries.
-  boundaries.forEach((boundary) => {
-    boundary.draw();
-  });
+    class Player {
+      constructor({ id, position, velocity, color, isLocal }) {
+        this.id = id;
+        this.position = position;
+        this.velocity = velocity;
+        this.radius = 15;
+        this.color = color;
+        this.isLocal = isLocal;
+        // For remote players, we use a target position for interpolation.
+        this.targetPosition = { ...position };
+      }
+      draw() {
+        c.beginPath();
+        c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+        c.fillStyle = this.color;
+        c.fill();
+        c.closePath();
+      }
+      update() {
+        if (!this.isLocal) {
+          // Smoothly interpolate toward the target position.
+          this.position.x += (this.targetPosition.x - this.position.x) * 0.2;
+          this.position.y += (this.targetPosition.y - this.position.y) * 0.2;
+        }
+        this.draw();
+      }
+    }
 
-  // Update every player (both local and remote).
-  players.forEach((player) => {
-    player.update();
-    // Only send updates for the local player.
-    if (player.isLocal && socket.readyState === WebSocket.OPEN) {
+    class Pellet {
+      constructor({ position }) {
+        this.position = position;
+        this.radius = 3;
+      }
+      draw() {
+        c.beginPath();
+        c.arc(
+          this.position.x,
+          this.position.y,
+          this.radius,
+          0,
+          Math.PI * 2
+        );
+        c.fillStyle = "white";
+        c.fill();
+        c.closePath();
+      }
+    }
+
+    // Use a separate map for remote players.
+    const remotePlayers = new Map();
+    const pellets = [];
+    const boundaries = [];
+
+    const localPlayerId = localPlayerIdRef.current;
+    const localPlayerColor = `hsl(${Math.random() * 360}, 70%, 60%)`;
+    const localPlayer = new Player({
+      id: localPlayerId,
+      position: { x: Boundary.width * 1.5, y: Boundary.height * 1.5 },
+      velocity: { x: 0, y: 0 },
+      color: localPlayerColor,
+      isLocal: true,
+    });
+
+    const keys = {
+      w: { pressed: false },
+      a: { pressed: false },
+      s: { pressed: false },
+      d: { pressed: false },
+    };
+
+    let score = 0;
+
+    const socket = new WebSocket("ws://192.168.115.69:8082/ws");
+
+    socket.addEventListener("open", () => {
+      console.log("WebSocket connected");
       socket.send(
         JSON.stringify({
+          type: "new_player",
           id: localPlayerId,
-          position: player.position,
-          velocity: player.velocity,
+          color: localPlayerColor,
         })
       );
+    });
+
+    socket.addEventListener("message", (event) => {
+      const data = JSON.parse(event.data);
+      if (data.players) {
+        Object.entries(data.players).forEach(([id, playerData]) => {
+          // Skip updating local player state from the server.
+          if (id === localPlayerId) return;
+          if (!remotePlayers.has(id)) {
+            remotePlayers.set(
+              id,
+              new Player({
+                id,
+                position: playerData.position,
+                velocity: playerData.velocity,
+                color:
+                  playerData.color || `hsl(${Math.random() * 360}, 70%, 60%)`,
+                isLocal: false,
+              })
+            );
+          } else {
+            const remotePlayer = remotePlayers.get(id);
+            // Update target position for smoother interpolation.
+            remotePlayer.targetPosition = playerData.position;
+            remotePlayer.velocity = playerData.velocity;
+          }
+        });
+      }
+    });
+
+    function collisionDetection({ player, boundary, velocity }) {
+      const vx = velocity?.x ?? player.velocity.x;
+      const vy = velocity?.y ?? player.velocity.y;
+      return (
+        player.position.y - player.radius + vy <=
+          boundary.position.y + boundary.height &&
+        player.position.x + player.radius + vx >= boundary.position.x &&
+        player.position.y + player.radius + vy >= boundary.position.y &&
+        player.position.x - player.radius + vx <=
+          boundary.position.x + boundary.width
+      );
     }
-  });
-}
-  // Initialize by loading the map first, then start the animation loop.
-  async function init() {
-    await loadMap();
-    animate();
-  }
-  init();
+
+    async function loadMap() {
+      try {
+        const res = await fetch("http://192.168.115.69:8082/getMap");
+        const map = await res.json();
+        map.forEach((row, i) => {
+          row.forEach((symbol, j) => {
+            if (symbol === "1") {
+              boundaries.push(
+                new Boundary({
+                  position: {
+                    x: Boundary.width * j,
+                    y: Boundary.height * i,
+                  },
+                })
+              );
+            } else if (symbol === "0") {
+              pellets.push(
+                new Pellet({
+                  position: {
+                    x: Boundary.width * j + Boundary.width / 2,
+                    y: Boundary.height * i + Boundary.height / 2,
+                  },
+                })
+              );
+            }
+          });
+        });
+      } catch (err) {
+        console.error("Error loading map:", err);
+      }
+    }
+
+    let lastSentTime = 0;
+    const SEND_INTERVAL = 100;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      c.clearRect(0, 0, canvas.width, canvas.height);
+
+      let vx = localPlayer.velocity.x;
+      let vy = localPlayer.velocity.y;
+      if (keys.w.pressed) vy = -6;
+      if (keys.s.pressed) vy = 6;
+      if (keys.a.pressed) vx = -6;
+      if (keys.d.pressed) vx = 6;
+
+      let blockedX = false;
+      let blockedY = false;
+      for (const boundary of boundaries) {
+        if (
+          collisionDetection({
+            player: localPlayer,
+            boundary,
+            velocity: { x: vx, y: 0 },
+          })
+        )
+          blockedX = true;
+        if (
+          collisionDetection({
+            player: localPlayer,
+            boundary,
+            velocity: { x: 0, y: vy },
+          })
+        )
+          blockedY = true;
+      }
+      localPlayer.velocity.x = blockedX ? 0 : vx;
+      localPlayer.velocity.y = blockedY ? 0 : vy;
+
+      for (let i = pellets.length - 1; i >= 0; i--) {
+        const pellet = pellets[i];
+        pellet.draw();
+        if (
+          Math.hypot(
+            pellet.position.x - localPlayer.position.x,
+            pellet.position.y - localPlayer.position.y
+          ) <
+          pellet.radius + localPlayer.radius
+        ) {
+          pellets.splice(i, 1);
+          score += 10;
+          scoreEl.innerHTML = score;
+        }
+      }
+
+      boundaries.forEach((b) => b.draw());
+
+      // Update local player.
+      localPlayer.position.x += localPlayer.velocity.x;
+      localPlayer.position.y += localPlayer.velocity.y;
+      localPlayer.draw();
+
+      // Send local player state periodically.
+      if (
+        Date.now() - lastSentTime > SEND_INTERVAL &&
+        socket.readyState === WebSocket.OPEN
+      ) {
+        socket.send(
+          JSON.stringify({
+            id: localPlayerId,
+            position: localPlayer.position,
+            velocity: localPlayer.velocity,
+            color: localPlayer.color,
+          })
+        );
+        lastSentTime = Date.now();
+      }
+
+      // Update remote players.
+      remotePlayers.forEach((player) => {
+        player.update();
+      });
+    }
+
+    window.addEventListener("keydown", ({ key }) => {
+      if (keys[key]) {
+        keys[key].pressed = true;
+      }
+    });
+
+    window.addEventListener("keyup", ({ key }) => {
+      if (keys[key]) keys[key].pressed = false;
+    });
+
+    loadMap().then(() => {
+      animate();
+    });
+  }, []);
+
+  return (
+    <div>
+      <canvas ref={canvasRef} />
+      <div id="scoreEl" ref={scoreElRef}></div>
+    </div>
+  );
 }
 
 export default App;
