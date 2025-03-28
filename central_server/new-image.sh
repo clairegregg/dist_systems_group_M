@@ -2,9 +2,11 @@
 
 # Load environment variables from .env file
 if [ -f .env ]; then
-  export $(cat .env | grep -v '#' | awk '/=/ {print $1}')
+  set -o allexport
+  source .env
+  set +o allexport
 else
-  echo ".env file not found. Please create one with your DOCKER_USERNAME set."
+  echo ".env file not found."
   exit 1
 fi
 
