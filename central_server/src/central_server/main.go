@@ -506,7 +506,20 @@ func addChunkToDB(ctx context.Context, x, y int, url string) error {
 	return nil
 }
 
+func clearChunkServers(ctx context.Context) error {
+	collection := client.Database("game").Collection("chunks")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := collection.DeleteMany(ctx, bson.D{})
+	return err
+}
+
 func initialChunkServers(ctx context.Context) error {
+	err := clearChunkServers(ctx)
+	if err != nil {
+		return err
+	}
+
 	urls, err := k8s.GetCurrentChunkServerUrls(ctx, clusterClients)
 	if err != nil {
 		return err
