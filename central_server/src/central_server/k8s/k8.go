@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -138,6 +139,20 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	_, err = clientset.AppsV1().StatefulSets("default").UpdateScale(ctx, "pacman-chunk", scale, metav1.UpdateOptions{})
 	if err != nil {
 		return "", err
+	}
+
+	// Wait until the new pod has started
+	watcher, err := clientset.CoreV1().Pods("default").Watch(ctx, metav1.ListOptions{
+		LabelSelector: "app=pacman-chunk",
+	})
+	if err != nil {
+		return "", err
+	}
+	defer watcher.Stop()
+	for event := range watcher.ResultChan() {
+		if event.Type == watch.Added {
+			break
+		}
 	}
 
 	// Retrieve the name of the new chunk server/replica
