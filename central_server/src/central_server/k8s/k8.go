@@ -142,8 +142,19 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	}
 
 	// Wait until the new pod has started
+	// First get current state
+	podList, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=pacman-chunk",
+	})
+	if err != nil {
+		return "", err
+	}
+	resourceVersion := podList.ResourceVersion
+
+	// Then listen from there
 	watcher, err := clientset.CoreV1().Pods("default").Watch(ctx, metav1.ListOptions{
 		LabelSelector: "app=pacman-chunk",
+		ResourceVersion: resourceVersion,
 	})
 	if err != nil {
 		return "", err
@@ -151,19 +162,22 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	defer watcher.Stop()
 	for event := range watcher.ResultChan() {
 		if event.Type == watch.Added {
+			pod := event.Object.(*corev1.Pod)
+			log.Printf("Created pod with name %s, status %v", pod.Name, pod.Status)
 			break
 		}
+		log.Printf("Nothing created, event type %v", event.Type)
 	}
 
 	// Retrieve the name of the new chunk server/replica
 	pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=pacman-chunk",
 	})
-	podList := pods.Items
-	slices.SortFunc(podList, func(a, b corev1.Pod) int {
+	ps := pods.Items
+	slices.SortFunc(ps, func(a, b corev1.Pod) int {
 		return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
 	})
-	newestPod := podList[len(podList)-1]
+	newestPod := ps[len(ps)-1]
 
 	return getChunkServerUrl(newestPod.Name, clients[0].clusterName), nil
 }
