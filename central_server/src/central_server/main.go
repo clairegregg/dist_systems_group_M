@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Cormuckle/dist_systems_group_M/central_server/k8s"
@@ -94,7 +96,7 @@ type NewChunkServerResponse struct {
 
 type DeleteChunkServerRequest struct {
 	ChunkServerAddress string `json:"chunkServerAddress"`
-	ChunkCoordinates    struct {
+	ChunkCoordinates   struct {
 		X int `json:"x"`
 		Y int `json:"y"`
 	} `json:"chunkCoordinates"`
@@ -577,43 +579,41 @@ func main() {
 	// Initialise chunk servers with coordinates
 	initialChunkServers(ctx)
 
-	/*
-		// Kafka setup
-		kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
-		if kafkaBroker == "" {
-			kafkaBroker = "kafka:9092"
-		}
+	// Kafka setup
+	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
+	if kafkaBroker == "" {
+		kafkaBroker = "kafka:9092"
+	}
 
-		// Initialize Kafka Producer
-		kafkaProducer, err = kafka.NewProducer([]string{kafkaBroker})
-		if err != nil {
-			log.Fatalf("Failed to initialize Kafka producer: %v", err)
-		}
+	// Initialize Kafka Producer
+	kafkaProducer, err = kafka.NewProducer([]string{kafkaBroker})
+	if err != nil {
+		log.Fatalf("Failed to initialize Kafka producer: %v", err)
+	}
 
-		// Initialize Kafka Consumer
-		kafkaConsumer, err = kafka.NewConsumer([]string{kafkaBroker}, "central-server-group")
-		if err != nil {
-			log.Fatalf("Failed to initialize Kafka consumer: %v", err)
-		}
+	// Initialize Kafka Consumer
+	kafkaConsumer, err = kafka.NewConsumer([]string{kafkaBroker}, "central-server-group")
+	if err != nil {
+		log.Fatalf("Failed to initialize Kafka consumer: %v", err)
+	}
 
-		// Start consuming messages from chunk servers
-		go consumeChunkMessages(ctx)
+	// Start consuming messages from chunk servers
+	go consumeChunkMessages(ctx)
 
-		// Graceful shutdown handling
-		go func() {
-			sigChan := make(chan os.Signal, 1)
-			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-			<-sigChan
-			log.Println("Shutting down Central Server...")
+	// Graceful shutdown handling
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		<-sigChan
+		log.Println("Shutting down Central Server...")
 
-			// Cleanup Kafka connections
-			kafkaProducer.Close()
-			kafkaConsumer.Close()
+		// Cleanup Kafka connections
+		kafkaProducer.Close()
+		kafkaConsumer.Close()
 
-			cancel()
-			os.Exit(0)
-		}()
-	*/
+		cancel()
+		os.Exit(0)
+	}()
 
 	// Start HTTP server
 	r := setupRouter()
