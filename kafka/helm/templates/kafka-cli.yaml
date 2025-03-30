@@ -4,11 +4,6 @@ metadata:
   name: kafka-cli
   namespace: kafka
 spec:
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 1
   containers:
   - name: kafka
     image: solsson/kafka:0.11.0.0
