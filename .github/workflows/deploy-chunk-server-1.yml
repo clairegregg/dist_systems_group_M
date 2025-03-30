@@ -22,7 +22,7 @@ jobs:
         version: 'v1.23.0' 
 
     - name: Install Helm
-      uses: azure/setup-helm@v1
+      uses: azure/setup-helm@v4.3.0
 
     - name: Create kubeconfig file
       run: echo "${{ secrets.CHUNK_SERVER_1_KUBECONFIG }}" > ${{ github.workspace }}/kubeconfig
