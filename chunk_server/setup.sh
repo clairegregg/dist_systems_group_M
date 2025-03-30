@@ -22,13 +22,13 @@ for ((i=1; i<=$NUM_CLUSTERS; i++)); do
   kind create cluster --name chunk$i
 
   # Using your docker username
-  sed 's/clairegregg/${DOCKER_USERNAME}/g' chunk_server/k8s/pacman-chunk.yaml | envsubst | kubectl apply -f -
-  sed -e "s/{i}/${i}/g" chunk_server/k8s/caddy.yaml | kubectl apply -f -
-  sleep 5s
-  kubectl wait --for=condition=ready pod -l app=pacman-chunk --timeout=300s
-  kubectl wait --for=condition=ready pod -l app=caddy --timeout=300s
+  # sed 's/clairegregg/${DOCKER_USERNAME}/g' chunk_server/k8s/pacman-chunk.yaml | envsubst | kubectl apply -f -
+  # sed -e "s/{i}/${i}/g" chunk_server/k8s/caddy.yaml | kubectl apply -f -
+  # sleep 5s
+  # kubectl wait --for=condition=ready pod -l app=pacman-chunk --timeout=300s
+  # kubectl wait --for=condition=ready pod -l app=caddy --timeout=300s
 
-  # Port forward the web application
-  nohup kubectl port-forward --address 0.0.0.0 svc/caddy 808$i:80 > caddy-${i}-port.log 2>&1 &
-  nohup kubectl port-forward --address 0.0.0.0 svc/caddy 443$i:443 > caddy-${i}-https-port.log 2>&1 &
+  # # Port forward the web application
+  # nohup kubectl port-forward --address 0.0.0.0 svc/caddy 808$i:80 > caddy-${i}-port.log 2>&1 &
+  # nohup kubectl port-forward --address 0.0.0.0 svc/caddy 443$i:443 > caddy-${i}-https-port.log 2>&1 &
 done
