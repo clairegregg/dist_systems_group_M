@@ -128,7 +128,17 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 		return "", fmt.Errorf("No clusters are reachable")
 	}
 
+	log.Printf("Adding chunk server to cluster %s", clients[0].clusterName)
 	clientset := clients[0].clientset
+
+	// Get current state of the cluster
+	podList, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=pacman-chunk",
+	})
+	if err != nil {
+		return "", err
+	}
+	resourceVersion := podList.ResourceVersion
 
 	// Add another replica to the cluster
 	scale, err := clientset.AppsV1().StatefulSets("default").GetScale(ctx, "pacman-chunk", metav1.GetOptions{})
@@ -142,16 +152,6 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	}
 
 	// Wait until the new pod has started
-	// First get current state
-	podList, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
-		LabelSelector: "app=pacman-chunk",
-	})
-	if err != nil {
-		return "", err
-	}
-	resourceVersion := podList.ResourceVersion
-
-	// Then listen from there
 	watcher, err := clientset.CoreV1().Pods("default").Watch(ctx, metav1.ListOptions{
 		LabelSelector: "app=pacman-chunk",
 		ResourceVersion: resourceVersion,

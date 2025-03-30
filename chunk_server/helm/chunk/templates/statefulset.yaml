@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pacman-chunk
+spec:
+  replicas: {{ .Values.pacmanChunk.replicas }}
+  selector:
+    matchLabels:
+      app: pacman-chunk
+  serviceName: "pacman-chunk"
+  template:
+    metadata:
+      labels:
+        app: pacman-chunk
+    spec:
+      containers:
+        - name: pacman-chunk
+          image: {{ .Values.pacmanChunk.image }}
+          ports:
+            - containerPort: {{ .Values.pacmanChunk.port }}
