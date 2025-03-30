@@ -27,8 +27,12 @@ jobs:
     - name: Create kubeconfig file
       run: echo "${{ secrets.CHUNK_SERVER_1_KUBECONFIG }}" > ${{ github.workspace }}/kubeconfig
 
+    - name: Debug Helm Chart Structure
+      run: ls -R chunk_server/helm
+
     - name: Deploy to Kubernetes using Helm
       env:
         KUBECONFIG: ${{ github.workspace }}/kubeconfig
       run: |
-       cd chunk_server/helm       helm upgrade chunk . 
+       cd chunk_server/helm       
+       helm upgrade chunk . 
