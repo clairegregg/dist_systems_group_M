@@ -16,14 +16,20 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    - name: 'Deploy'
-      uses: 'deliverybot/helm@v1'
+    - name: Set up Kubectl
+      uses: azure/setup-kubectl@v3
       with:
-        release: 'chunk'
-        namespace: 'default'
-        chart: 'chunk_server/helm/chunk/app'
-        value-files: 'chunk_server/helm/values'
+        version: 'v1.23.0' 
+
+    - name: Install Helm
+      uses: azure/setup-helm@v1
+
+    - name: Create kubeconfig file
+      run: echo "${{ secrets.CHUNK_SERVER_3_KUBECONFIG }}" > ${{ github.workspace }}/kubeconfig
+
+    - name: Deploy to Kubernetes using Helm
       env:
-        KUBECONFIG_FILE: '${{ secrets.CHUNK_SERVER_3_KUBECONFIG }}'
-
-
+        KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      run: |
+       cd chunk_server/helm       
+       helm upgrade chunk . 
