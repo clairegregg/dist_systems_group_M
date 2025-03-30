@@ -4,6 +4,11 @@ metadata:
   name: zoonavigator
   namespace: kafka
 spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       run: zoonavigator

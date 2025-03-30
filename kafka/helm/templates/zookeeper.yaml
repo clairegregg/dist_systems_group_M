@@ -106,7 +106,7 @@ spec:
       containers:
       - name: k8szk
         imagePullPolicy: Always
-        image: gcr.io/google_samples/k8szk:v3
+        image: zookeeper:latest
         ports:
         - containerPort: 2181
           name: client
@@ -117,22 +117,6 @@ spec:
         envFrom:
           - configMapRef:
               name: zookeeper-config
-        command:
-        - sh
-        - -c
-        - zkGenConfig.sh && zkServer.sh start-foreground
-        readinessProbe:
-          exec:
-            command:
-            - "zkOk.sh"
-          initialDelaySeconds: 15
-          timeoutSeconds: 5
-        livenessProbe:
-          exec:
-            command:
-            - "zkOk.sh"
-          initialDelaySeconds: 15
-          timeoutSeconds: 5
         volumeMounts:
         - name: zookeeper-storage
           mountPath: /var/lib/zookeeper

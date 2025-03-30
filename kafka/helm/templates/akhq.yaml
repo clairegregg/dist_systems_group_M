@@ -13,6 +13,11 @@ metadata:
     meta.helm.sh/release-name: akhq
     meta.helm.sh/release-namespace: kafka
 spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   replicas: 1
   selector:
     matchLabels:
