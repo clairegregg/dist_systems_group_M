@@ -31,5 +31,4 @@ jobs:
       env:
         KUBECONFIG: ${{ github.workspace }}/kubeconfig
       run: |
-       cd chunk_server/helm       
-       helm upgrade chunk . 
+       cd chunk_server/helm       helm upgrade chunk . 
