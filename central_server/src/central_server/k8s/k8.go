@@ -7,7 +7,6 @@ import (
 	"log"
 	"math"
 	"slices"
-	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -15,11 +14,15 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/utils/ptr"
+
+	kruiseclientset "github.com/openkruise/kruise-api/client/clientset/versioned"
 )
 
 type ClusterClient struct {
-	clientset *kubernetes.Clientset
-	clusterName string
+	clientset    *kubernetes.Clientset
+	kruiseclient *kruiseclientset.Clientset
+	clusterName  string
 	currentCount int
 }
 
@@ -41,10 +44,15 @@ func KubeClients(kubeconfigs []string) ([]*ClusterClient, error) {
 		if err != nil {
 			return nil, err
 		}
+		kruiseclient, err := kruiseclientset.NewForConfig(config)
+		if err != nil {
+			return nil, err
+		}
 
 		newClient := &ClusterClient{
-			clientset: clientset,
-			clusterName: currentContext,
+			clientset:    clientset,
+			kruiseclient: kruiseclient,
+			clusterName:  currentContext,
 		}
 
 		clients = append(clients, newClient)
@@ -63,43 +71,30 @@ func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (int,
 }
 
 func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, url string) error {
-	clusterName := strings.Split(url, ".")[0] // Extract just (EG) chunk1 from chunk1.clairegregg.com/?id=1
-	chunkId := strings.Split(url, "=")[1]
-	podName := "pacman-chunk-"+chunkId
+	clusterName := strings.Split(url, ".")[0] // Extract just (EG) chunk1 from chunk1.clairegregg.com/?id=2
+	chunkId := strings.Split(url, "=")[1]     // Extract just (EG) 2 from chunk1.clairegregg.com/?id=2
+	podName := "pacman-chunk-" + chunkId
 
 	// Get correct cluster client
-	var clientset *kubernetes.Clientset
-	for _, client  := range clients {
+	var kruiseclient *kruiseclientset.Clientset
+	for _, client := range clients {
 		log.Printf("Cluster name is %v", client.clusterName)
 		if (client.clusterName == clusterName) || (client.clusterName == "kind-"+clusterName) {
-			clientset = client.clientset
+			kruiseclient = client.kruiseclient
 			break
 		}
 	}
-	if clientset == nil {
+	if kruiseclient == nil {
 		return fmt.Errorf("no clients match cluster name %v", clusterName)
 	}
 
-	// Set the pod serving the server to have the lowest deletion cost, meaning it should be deleted first
-	server, err := clientset.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
+	// Delete the pod
+	cloneset, err := kruiseclient.AppsV1alpha1().CloneSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
-	ann := server.GetAnnotations()
-	if ann == nil {
-		ann = map[string]string{"controller.kubernetes.io/pod-deletion-cost": strconv.Itoa(math.MinInt)}
-	} else {
-		ann["controller.kubernetes.io/pod-deletion-cost"] = strconv.Itoa(math.MinInt) // Deletion cost is 0 by default, so min int should be fine!
-	}
-	server.SetAnnotations(ann)
-
-	// Decrease number of replicas
-	scale, err := clientset.AppsV1().StatefulSets("default").GetScale(ctx, "pacman-chunk", metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	scale.Spec.Replicas = scale.Spec.Replicas - 1
-	_, err = clientset.AppsV1().StatefulSets("default").UpdateScale(ctx, "pacman-chunk", scale, metav1.UpdateOptions{})
+	cloneset.Spec.ScaleStrategy.PodsToDelete = append(cloneset.Spec.ScaleStrategy.PodsToDelete, podName)
+	cloneset, err = kruiseclient.AppsV1alpha1().CloneSets("default").Update(ctx, cloneset, metav1.UpdateOptions{})
 	if err != nil {
 		return err
 	}
@@ -130,6 +125,7 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 
 	log.Printf("Adding chunk server to cluster %s", clients[0].clusterName)
 	clientset := clients[0].clientset
+	kruiseclient := clients[0].kruiseclient
 
 	// Get current state of the cluster
 	podList, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
@@ -141,19 +137,19 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	resourceVersion := podList.ResourceVersion
 
 	// Add another replica to the cluster
-	scale, err := clientset.AppsV1().StatefulSets("default").GetScale(ctx, "pacman-chunk", metav1.GetOptions{})
+	cloneset, err := kruiseclient.AppsV1alpha1().CloneSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
-	scale.Spec.Replicas = scale.Spec.Replicas + 1
-	_, err = clientset.AppsV1().StatefulSets("default").UpdateScale(ctx, "pacman-chunk", scale, metav1.UpdateOptions{})
+	cloneset.Spec.Replicas = ptr.To((*(cloneset.Spec.Replicas) + 1))
+	cloneset, err = kruiseclient.AppsV1alpha1().CloneSets("default").Update(ctx, cloneset, metav1.UpdateOptions{})
 	if err != nil {
 		return "", err
 	}
 
 	// Wait until the new pod has started
 	watcher, err := clientset.CoreV1().Pods("default").Watch(ctx, metav1.ListOptions{
-		LabelSelector: "app=pacman-chunk",
+		LabelSelector:   "app=pacman-chunk",
 		ResourceVersion: resourceVersion,
 	})
 	if err != nil {
@@ -190,7 +186,7 @@ func getChunkServerUrl(podName, clusterName string) string {
 	return fmt.Sprintf("%s.clairegregg.com/?id=%s", strings.ReplaceAll(clusterName, "kind-", ""), podNum)
 }
 
-func GetCurrentChunkServerUrls(ctx context.Context, clients []*ClusterClient) ([]string, error){
+func GetCurrentChunkServerUrls(ctx context.Context, clients []*ClusterClient) ([]string, error) {
 	var urls []string
 
 	// Search all clusters
