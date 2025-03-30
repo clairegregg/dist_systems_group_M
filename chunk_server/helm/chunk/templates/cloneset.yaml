@@ -19,3 +19,6 @@ spec:
           image: {{ .Values.pacmanChunk.image }}
           ports:
             - containerPort: {{ .Values.pacmanChunk.port }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVER
+              value: {{ .Values.pacmanChunk.kafka }}

@@ -26,6 +26,8 @@ spec:
               value: "mongodb://admin:password@mongodb:27017"
             - name: KUBECONFIGS
               value: "/etc/kubeconfigs/config1.yaml,/etc/kubeconfigs/config2.yaml,/etc/kubeconfigs/config3.yaml"
+            - name: KAFKA_BOOTSTRAP_SERVER
+              value: "kafka.clairegregg.com"
           volumeMounts:
             - name: kubeconfig-volume
               mountPath: "/etc/kubeconfigs"
