@@ -21,6 +21,7 @@ var (
 	client          *mongo.Client
 	mongoURI        = os.Getenv("MONGO_URI")
 	kubeconfigPaths = os.Getenv("KUBECONFIGS")
+	kubeconfigs     []string
 	db              = make(map[string]string)
 	kafkaProducer   *kafka.Producer
 	kafkaConsumer   *kafka.Consumer
@@ -48,9 +49,9 @@ func connectToDB(ctx context.Context) (*mongo.Client, error) {
 
 // MongoDB Data Types
 type Chunk struct {
-	x   int
-	y   int
-	url string
+	X   int    `bson:"x"`
+	Y   int    `bson:"y"`
+	Url string `bson:"url"`
 }
 
 // Request/Response models
@@ -89,6 +90,14 @@ type NewChunkServerRequest struct {
 
 type NewChunkServerResponse struct {
 	ChunkServerAddress string `json:"chunkServerAddress"`
+}
+
+type DeleteChunkServerRequest struct {
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	ChunkCoordinates    struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	} `json:"chunkCoordinates"`
 }
 
 type UpdateScoreRequest struct {
@@ -283,6 +292,24 @@ func setupRouter() *gin.Engine {
 		})
 	})
 
+	// Temporary DELETE request to bring down a chunk server.
+	// Should be replaced with communication from Kafka when a chunk should be brought down.
+	r.DELETE("/delete-chunk-server", func(c *gin.Context) {
+		var req DeleteChunkServerRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		err := deleteChunk(c, req.ChunkCoordinates.X, req.ChunkCoordinates.Y, req.ChunkServerAddress)
+		if err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error, failed to delete chunk server %v, %v: %w", req.ChunkCoordinates.X, req.ChunkCoordinates.Y, err).Error()})
+			return
+		}
+	})
+
 	// Send a broadcast message to all chunk servers
 	// This is just for tesing purpose but we can use this function iternally to communicate
 	/*
@@ -395,6 +422,34 @@ func consumeChunkMessages(ctx context.Context) {
 	}
 }
 
+func deleteChunk(ctx context.Context, x, y int, url string) error {
+	collection := client.Database("game").Collection("chunks")
+	ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// Check if the chunk server actually exists
+	cursor, err := collection.Find(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}, {Key: "url", Value: url}})
+	if err != nil {
+		return err
+	}
+	var results []Chunk
+	if err = cursor.All(ctxC, &results); err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		return fmt.Errorf("a chunk server does not exist with coordinates (%v,%v) and url %v, so it cannot be deleted.", x, y, url)
+	}
+
+	// Delete the chunk server from records
+	_, err = collection.DeleteOne(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}, {Key: "url", Value: url}})
+	if err != nil {
+		return err
+	}
+
+	// Turn the chunk server down
+	return k8s.DeleteChunkServer(ctx, clusterClients, x, y, url)
+}
+
 func getChunk(ctx context.Context, x, y int) (string, error) {
 	collection := client.Database("game").Collection("chunks")
 	ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -409,8 +464,16 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 		return "", err
 	}
 	defer cursor.Close(ctx)
+	log.Printf("Chunk results from DB are %v", results)
 
 	if len(results) == 0 {
+		if len(clusterClients) == 0 {
+			log.Printf("No clusterclients currently - kubeconfigs are %v", kubeconfigs)
+			clusterClients, err = k8s.KubeClients(kubeconfigs)
+			if err != nil {
+				return "", err
+			}
+		}
 		url, err := k8s.NewChunkServer(ctx, clusterClients)
 		if err != nil {
 			return "", err
@@ -422,7 +485,7 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 		return url, nil
 	}
 	chunk := results[0]
-	return chunk.url, nil
+	return chunk.Url, nil
 }
 
 func addChunkToDB(ctx context.Context, x, y int, url string) error {
@@ -431,10 +494,11 @@ func addChunkToDB(ctx context.Context, x, y int, url string) error {
 	defer cancel()
 	// Add chunk to DB
 	chunk := Chunk{
-		x:   x,
-		y:   y,
-		url: url,
+		X:   x,
+		Y:   y,
+		Url: url,
 	}
+	log.Printf("Writing this chunk to DB: %v", chunk)
 	_, err := collection.InsertOne(ctx, chunk)
 	if err != nil {
 		return err
@@ -442,7 +506,20 @@ func addChunkToDB(ctx context.Context, x, y int, url string) error {
 	return nil
 }
 
+func clearChunkServers(ctx context.Context) error {
+	collection := client.Database("game").Collection("chunks")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := collection.DeleteMany(ctx, bson.D{})
+	return err
+}
+
 func initialChunkServers(ctx context.Context) error {
+	err := clearChunkServers(ctx)
+	if err != nil {
+		return err
+	}
+
 	urls, err := k8s.GetCurrentChunkServerUrls(ctx, clusterClients)
 	if err != nil {
 		return err
@@ -466,6 +543,7 @@ func initialChunkServers(ctx context.Context) error {
 				i += 8
 			}
 		}
+		n++
 	}
 
 	for i, url := range urls {
@@ -490,8 +568,11 @@ func main() {
 	defer client.Disconnect(ctx)
 
 	// Create k8s clients for chunk clusters
-	kubeconfigs := strings.Split(kubeconfigPaths, ",")
+	kubeconfigs = strings.Split(kubeconfigPaths, ",")
 	clusterClients, err = k8s.KubeClients(kubeconfigs)
+	if err != nil {
+		log.Fatalf("Error connecting to cluster clients: %v", err)
+	}
 
 	// Initialise chunk servers with coordinates
 	initialChunkServers(ctx)

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: caddy
+spec:
+  selector:
+    app: caddy
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ .Values.caddy.ports.http }}
+      targetPort: {{ .Values.caddy.ports.http }}
+    - name: https
+      protocol: TCP
+      port: {{ .Values.caddy.ports.https }}
+      targetPort: {{ .Values.caddy.ports.https }}
+  type: {{ .Values.service.type }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pacman-chunk
+spec:
+  clusterIP: None
+  selector:
+    app: pacman-chunk
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: {{ .Values.pacmanChunk.port }}

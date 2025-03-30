@@ -1,5 +1,6 @@
 # Port forward the access port for the central server to :6441 which is open
 kubectl config use-context kind-central
+nohup kubectl port-forward --address 0.0.0.0 svc/mongodb 6455:27017 > central-server-db-port.log 2>&1 &
 nohup kubectl port-forward --address 0.0.0.0 svc/pacman-central 6441:80 > central-server-port.log 2>&1 &
 
 # Port forward caddy ports for chunk servers to ports in the range 36000-37000
