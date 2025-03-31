@@ -43,6 +43,14 @@ metadata:
   name: kafka
   namespace: kafka
 spec:
+  dnsConfig:
+    searches: 
+      - kafka.svc.cluster.local
+      - svc.cluster.local
+      - cluster.local
+    options:
+      - name: ndots
+        value: "5"
   selector:
     matchLabels:
       app: kafka
