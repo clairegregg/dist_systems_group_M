@@ -21,5 +21,5 @@ nohup kubectl port-forward --address 0.0.0.0 svc/caddy 36403:443 > caddy-3-https
 
 # Port forward kafka, to be managed by caddy
 kubectl config use-context kind-kafka
-nohup kubectl port-forward -n kafka --address 0.0.0.0 svc/kafka-broker 36902:9092 > kafka-port.log 2>&1 &
+nohup kubectl port-forward -n kafka --address 0.0.0.0 svc/kafka-broker 6442:9092 > kafka-port.log 2>&1 &
  
