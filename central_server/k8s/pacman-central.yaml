@@ -27,7 +27,7 @@ spec:
             - name: KUBECONFIGS
               value: "/etc/kubeconfigs/config1.yaml,/etc/kubeconfigs/config2.yaml,/etc/kubeconfigs/config3.yaml"
             - name: KAFKA_BOOTSTRAP_SERVER
-              value: "http://kafka.clairegregg.com:80"
+              value: "kafka.clairegregg.com:80"
           volumeMounts:
             - name: kubeconfig-volume
               mountPath: "/etc/kubeconfigs"
