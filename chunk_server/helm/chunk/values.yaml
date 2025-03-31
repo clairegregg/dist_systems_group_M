@@ -11,7 +11,7 @@ pacmanChunk:
   image: clairegregg/pacman-chunk:latest
   replicas: 3
   port: 8080
-  kafka: "kafka.clairegregg.com"
+  kafka: "http://kafka.clairegregg.com:80"
 
 service:
   type: ClusterIP
