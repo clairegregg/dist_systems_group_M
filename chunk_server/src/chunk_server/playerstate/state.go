@@ -6,6 +6,8 @@ import (
 	"sync"
 )
 
+// ------------------ Player State ------------------
+
 // Position holds the relative X and Y coordinates.
 type Position struct {
 	X float64 `json:"x"`
@@ -19,12 +21,13 @@ type Velocity struct {
 }
 
 // PlayerState represents the state of an individual player.
-// Note: Position here is expected to be relative to the grid’s top-left corner.
+// The Status field marks whether the player is "active" or "left".
 type PlayerState struct {
 	ID       string   `json:"id"`
 	Position Position `json:"position"`
 	Velocity Velocity `json:"velocity"`
 	Score    int      `json:"score"`
+	Status   string   `json:"status"` // "active" or "left"
 }
 
 // gameStatePayload wraps the players map.
@@ -38,7 +41,6 @@ type GameState struct {
 	mu      sync.RWMutex
 }
 
-// globalGameState is the shared game state.
 var globalGameState = GameState{
 	Players: make(map[string]PlayerState),
 }
@@ -47,11 +49,26 @@ var globalGameState = GameState{
 func UpdatePlayerState(ps PlayerState) {
 	globalGameState.mu.Lock()
 	defer globalGameState.mu.Unlock()
+	// Default status to "active" if not provided.
+	if ps.Status == "" {
+		ps.Status = "active"
+	}
 	globalGameState.Players[ps.ID] = ps
-	log.Printf("Updated player state for %s, score: %d", ps.ID, ps.Score)
+	log.Printf("Updated player state for %s, score: %d, status: %s", ps.ID, ps.Score, ps.Status)
 }
 
-// RemovePlayerState removes a player's state (for example, when the connection closes).
+// MarkPlayerLeft marks a player's state as "left" instead of removing it.
+func MarkPlayerLeft(playerID string) {
+	globalGameState.mu.Lock()
+	defer globalGameState.mu.Unlock()
+	if ps, ok := globalGameState.Players[playerID]; ok {
+		ps.Status = "left"
+		globalGameState.Players[playerID] = ps
+		log.Printf("Marked player %s as left", playerID)
+	}
+}
+
+// RemovePlayerState removes a player's state from the game.
 func RemovePlayerState(playerID string) {
 	globalGameState.mu.Lock()
 	defer globalGameState.mu.Unlock()
@@ -59,7 +76,7 @@ func RemovePlayerState(playerID string) {
 	log.Printf("Removed player state for %s", playerID)
 }
 
-// GetGameStateJSON returns the current game state wrapped in a "players" field as JSON.
+// GetGameStateJSON returns the current game state (players only) as JSON.
 func GetGameStateJSON() []byte {
 	globalGameState.mu.RLock()
 	defer globalGameState.mu.RUnlock()
@@ -74,61 +91,79 @@ func GetGameStateJSON() []byte {
 	return state
 }
 
+// GetGameState returns a copy of the current game state as a map.
+func GetGameState() map[string]PlayerState {
+	globalGameState.mu.RLock()
+	defer globalGameState.mu.RUnlock()
+	copyMap := make(map[string]PlayerState, len(globalGameState.Players))
+	for k, v := range globalGameState.Players {
+		copyMap[k] = v
+	}
+	return copyMap
+}
+
 // ---------------- Pellet Synchronization ----------------
 
-// Pellet represents a pellet's state.
-type Pellet struct {
-	ID       string   `json:"id"`
-	Position Position `json:"position"`
+// Instead of storing all pellet information (which may be huge), we only keep track
+// of pellets that have been eaten. Clients initially load the full pellet map (e.g., from the map API),
+// then apply these removals.
+// We store the eaten pellet IDs in a thread-safe map.
+var eatenPellets = struct {
+	mu sync.RWMutex
+	m  map[string]bool
+}{
+	m: make(map[string]bool),
 }
 
-// pelletStatePayload wraps the pellet slice.
-type pelletStatePayload struct {
-	Pellets []Pellet `json:"pellets"`
-}
-
-// GlobalPelletState holds the state of all pellets.
-type GlobalPelletState struct {
-	Pellets []Pellet
-	mu      sync.RWMutex
-}
-
-var globalPelletState = GlobalPelletState{
-	Pellets: []Pellet{},
-}
-
-// UpdatePellets updates the global pellet state.
-func UpdatePellets(newPellets []Pellet) {
-	globalPelletState.mu.Lock()
-	defer globalPelletState.mu.Unlock()
-	globalPelletState.Pellets = newPellets
-	log.Printf("Updated pellets, count: %d", len(newPellets))
-}
-
-// RemovePellet removes a pellet by its ID.
+// RemovePellet marks a pellet as eaten by its ID.
 func RemovePellet(pelletID string) {
-	globalPelletState.mu.Lock()
-	defer globalPelletState.mu.Unlock()
-	newPellets := make([]Pellet, 0, len(globalPelletState.Pellets))
-	for _, p := range globalPelletState.Pellets {
-		if p.ID != pelletID {
-			newPellets = append(newPellets, p)
-		}
-	}
-	globalPelletState.Pellets = newPellets
-	log.Printf("Removed pellet %s, remaining: %d", pelletID, len(newPellets))
+	eatenPellets.mu.Lock()
+	defer eatenPellets.mu.Unlock()
+	eatenPellets.m[pelletID] = true
+	log.Printf("Pellet %s marked as eaten", pelletID)
 }
 
-// GetPelletsJSON returns the current pellet state as JSON.
-func GetPelletsJSON() []byte {
-	globalPelletState.mu.RLock()
-	defer globalPelletState.mu.RUnlock()
-	payload := pelletStatePayload{
-		Pellets: globalPelletState.Pellets,
+// GetEatenPellets returns a slice of eaten pellet IDs and then clears the stored map.
+// This acts as a "delta" so that each call returns only new removals.
+func GetEatenPellets() []string {
+	eatenPellets.mu.RLock()
+	defer eatenPellets.mu.RUnlock()
+	ids := make([]string, 0, len(eatenPellets.m))
+	for id := range eatenPellets.m {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// ---------------- Combined Game State ----------------
+
+// combinedStatePayload wraps both players and the list of eaten pellet IDs.
+type combinedStatePayload struct {
+	Players      map[string]PlayerState `json:"players"`
+	EatenPellets []string               `json:"eatenPellets"`
+}
+
+// GetCombinedGameStateJSON returns a combined JSON payload of players and eaten pellet IDs.
+// It uses GetEatenPellets() to get the delta of pellet deletions.
+func GetCombinedGameStateJSON() []byte {
+	// Copy players state.
+	globalGameState.mu.RLock()
+	playersCopy := make(map[string]PlayerState, len(globalGameState.Players))
+	for k, v := range globalGameState.Players {
+		playersCopy[k] = v
+	}
+	globalGameState.mu.RUnlock()
+
+	// Get the eaten pellet IDs (delta).
+	eaten := GetEatenPellets()
+
+	payload := combinedStatePayload{
+		Players:      playersCopy,
+		EatenPellets: eaten,
 	}
 	state, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Error marshalling pellets: %v", err)
+		log.Printf("Error marshalling combined game state: %v", err)
 		return nil
 	}
 	return state

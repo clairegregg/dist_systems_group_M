@@ -23,9 +23,16 @@ var (
 	clientsMu sync.Mutex
 )
 
-// Exported broadcast function used by the ticker.
+// MessageEnvelope wraps incoming messages with a type and raw data.
+type MessageEnvelope struct {
+	Type string          `json:"type"`
+	Data json.RawMessage `json:"data"`
+}
+
+// BroadcastGameState sends the current combined game state (players and eaten pellet IDs)
+// to all connected clients.
 func BroadcastGameState() {
-	state := playerstate.GetGameStateJSON()
+	state := playerstate.GetCombinedGameStateJSON()
 	if state == nil {
 		return
 	}
@@ -39,6 +46,7 @@ func BroadcastGameState() {
 	}
 }
 
+// WSHandler upgrades HTTP requests to WebSocket connections and listens for updates.
 func WSHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -50,6 +58,7 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 	clients[conn] = "" // initially, no player ID is associated
 	clientsMu.Unlock()
 
+	// When the connection closes, mark the player as left and update all clients.
 	defer func() {
 		clientsMu.Lock()
 		playerID := clients[conn]
@@ -57,13 +66,14 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 		clientsMu.Unlock()
 
 		if playerID != "" {
-			playerstate.RemovePlayerState(playerID)
+			playerstate.MarkPlayerLeft(playerID)
+			BroadcastGameState()
 		}
 		conn.Close()
 	}()
 
 	// Send the initial game state to the new client.
-	if state := playerstate.GetGameStateJSON(); state != nil {
+	if state := playerstate.GetCombinedGameStateJSON(); state != nil {
 		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := conn.WriteMessage(websocket.TextMessage, state); err != nil {
 			log.Printf("Error writing initial game state: %v", err)
@@ -73,29 +83,49 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Listen for messages from the client.
 	for {
-		messageType, message, err := conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			log.Printf("WebSocket read error: %v", err)
 			break
 		}
-		if messageType != websocket.TextMessage {
-			continue // Only process text messages.
-		}
 
-		var ps playerstate.PlayerState
-		if err := json.Unmarshal(message, &ps); err != nil {
-			log.Printf("Error parsing player state: %v", err)
+		var envelope MessageEnvelope
+		if err := json.Unmarshal(message, &envelope); err != nil {
+			log.Printf("Error parsing message envelope: %v", err)
 			continue
 		}
 
-		clientsMu.Lock()
-		if clients[conn] == "" && ps.ID != "" {
-			clients[conn] = ps.ID
+		switch envelope.Type {
+		case "player":
+			var ps playerstate.PlayerState
+			if err := json.Unmarshal(envelope.Data, &ps); err != nil {
+				log.Printf("Error parsing player state: %v", err)
+				continue
+			}
+			clientsMu.Lock()
+			if clients[conn] == "" && ps.ID != "" {
+				clients[conn] = ps.ID
+			}
+			clientsMu.Unlock()
+			playerstate.UpdatePlayerState(ps)
+		case "pellet":
+			// Expect pellet update messages to include a pelletId.
+			var pelletUpdate struct {
+				PelletID string `json:"pelletId"`
+				// Optionally include PlayerID and Score if needed.
+				PlayerID string `json:"id"`
+				Score    int    `json:"score"`
+			}
+			if err := json.Unmarshal(envelope.Data, &pelletUpdate); err != nil {
+				log.Printf("Error parsing pellet update: %v", err)
+				continue
+			}
+			// Mark the pellet as eaten globally.
+			playerstate.RemovePellet(pelletUpdate.PelletID)
+			// Broadcast the updated game state immediately.
+			BroadcastGameState()
+		default:
+			log.Printf("Unknown message type: %s", envelope.Type)
 		}
-		clientsMu.Unlock()
-
-		// Update the shared game state.
-		playerstate.UpdatePlayerState(ps)
-		// Removed immediate broadcast – state will be broadcast periodically.
 	}
 }
