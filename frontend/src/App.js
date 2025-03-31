@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
+import GlobalLeaderboard from "./GlobalLeaderboard";
+
 
 function App() {
   const WS_URL = "ws://localhost:8082/ws";
   const CHUCK_URL = "http://localhost:8082/getMap"
-  const CENTRAL = "http://localhost:8080/"
+  const CENTRAL_URL = "http://localhost:8080/"
   // Refs for canvas and scoreboard elements.
   const canvasRef = useRef(null);
   const scoreElRef = useRef(null);
@@ -532,6 +534,7 @@ function App() {
       <button onClick={() => window.reloadMap && window.reloadMap()}>
         Reload Map
       </button>
+      <GlobalLeaderboard />
     </div>
   );
 }

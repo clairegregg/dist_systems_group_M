@@ -18,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"github.com/gin-contrib/cors"
 )
 
 var (
@@ -107,7 +108,7 @@ type LeaderboardEntry struct {
 // setupRouter initializes HTTP routes.
 func setupRouter() *gin.Engine {
 	r := gin.Default()
-
+    r.Use(cors.Default())
 	r.GET("/dbconn", func(c *gin.Context) {
 		// Ping the database
 		err := client.Ping(context.Background(), nil)
