@@ -385,7 +385,6 @@ if (data.players) {
         player.update();
       });
     }
-
     window.addEventListener("keydown", ({ key }) => {
       if (keys[key]) {
         keys[key].pressed = true;
