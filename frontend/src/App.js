@@ -1,148 +1,103 @@
-import React, { useEffect, useRef, useState } from "react";
-import GlobalLeaderboard from "./GlobalLeaderboard";
-
+import React, { useEffect, useRef } from "react";
 
 function App() {
-  const WS_URL = "ws://localhost:8082/ws";
-  const CHUCK_URL = "http://localhost:8082/getMap"
-  const CENTRAL_URL = "http://localhost:8080/"
-  // Refs for canvas and scoreboard elements.
   const canvasRef = useRef(null);
   const scoreElRef = useRef(null);
   const scoreboardRef = useRef(null);
-  // Use sessionStorage so that the player ID persists across refreshes but clears when the tab is closed.
-  const storedPlayer = sessionStorage.getItem("localPlayer");
-  const initialPlayer = storedPlayer ? JSON.parse(storedPlayer) : null;
-  // If an ID already exists, use it; otherwise, generate a new one.
   const localPlayerIdRef = useRef(
-    initialPlayer?.id ||
-      Date.now().toString() + Math.random().toString(36).substring(2)
+    Date.now().toString() + Math.random().toString(36).substring(2)
   );
-  
-  // gridOffsetRef translates game world coordinates into screen coordinates.
+  // We'll store the grid offset in a ref.
   const gridOffsetRef = useRef({ x: 0, y: 0 });
 
-  // State for map and loaded flag.
-  const [localMap, setLocalMap] = useState([]);
-  const [mapLoaded, setMapLoaded] = useState(false);
-  const mapLoadedRef = useRef(mapLoaded);
   useEffect(() => {
-    mapLoadedRef.current = mapLoaded;
-  }, [mapLoaded]);
-
-  // Persist local player data in sessionStorage.
-  function saveLocalPlayer(player) {
-    sessionStorage.setItem("localPlayer", JSON.stringify(player));
-  }
-
-  useEffect(() => {
-    // Do NOT clear sessionStorage on beforeunload; this allows the ID to persist through refresh.
-    // Only the WebSocket connection will be closed on unload.
-    
     const canvas = canvasRef.current;
     const scoreEl = scoreElRef.current;
     const scoreboardEl = scoreboardRef.current;
     const c = canvas.getContext("2d");
 
-    // Set initial canvas dimensions.
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
+    // Flag to indicate that the map has loaded.
+    let mapLoaded = false;
+    // Queue remote messages received before the map is loaded.
     let remoteMessageQueue = [];
-    const CELL_SIZE = 40; // game world cell size
 
-    // --- Classes using game world coordinates ---
     class Boundary {
-      constructor({ gamePos }) {
-        this.gamePos = gamePos;
-        this.width = CELL_SIZE;
-        this.height = CELL_SIZE;
+      static width = 40;
+      static height = 40;
+      constructor({ position }) {
+        this.position = position;
+        this.width = 40;
+        this.height = 40;
       }
       draw() {
-        const screenX = gridOffsetRef.current.x + this.gamePos.x;
-        const screenY = gridOffsetRef.current.y + this.gamePos.y;
         c.fillStyle = "blue";
-        c.fillRect(screenX, screenY, this.width, this.height);
+        c.fillRect(this.position.x, this.position.y, this.width, this.height);
       }
     }
 
     class Player {
-      constructor({ id, gamePos, velocity, color, isLocal, score = 0 }) {
+      constructor({ id, position, velocity, color, isLocal, score = 0 }) {
         this.id = id;
-        this.gamePos = { ...gamePos };
+        this.position = position; // absolute position on canvas
         this.velocity = velocity;
         this.radius = 15;
         this.color = color;
         this.isLocal = isLocal;
         this.score = score;
-        this.targetGamePos = { ...gamePos };
-        this.lastUpdate = Date.now();
-      }
-      update(delta) {
-        if (!this.isLocal) {
-          const dx = this.targetGamePos.x - this.gamePos.x;
-          const dy = this.targetGamePos.y - this.gamePos.y;
-          const snapThreshold = 5000;
-          if (Math.abs(dx) > snapThreshold || Math.abs(dy) > snapThreshold) {
-            this.gamePos = { ...this.targetGamePos };
-          } else {
-            const smoothingFactor = 20;
-            this.gamePos.x += dx * delta * smoothingFactor;
-            this.gamePos.y += dy * delta * smoothingFactor;
-          }
-        }
-        this.draw();
+        // For remote players, we use a target position for interpolation.
+        this.targetPosition = { ...position };
       }
       draw() {
-        const screenX = gridOffsetRef.current.x + this.gamePos.x;
-        const screenY = gridOffsetRef.current.y + this.gamePos.y;
         c.beginPath();
-        c.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
+        c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
         c.fillStyle = this.color;
         c.fill();
         c.closePath();
       }
+      update() {
+        if (!this.isLocal) {
+          // Smoothly interpolate toward the target position.
+          this.position.x += (this.targetPosition.x - this.position.x) * 0.3;
+          this.position.y += (this.targetPosition.y - this.position.y) * 0.3;
+        }
+        this.draw();
+      }
     }
 
     class Pellet {
-      constructor({ gamePos }) {
-        this.gamePos = gamePos;
+      constructor({ position }) {
+        this.position = position; // absolute position on canvas
         this.radius = 3;
-        this.id = `${gamePos.x}-${gamePos.y}`;
+        // Unique id based on its absolute position.
+        this.id = `${position.x}-${position.y}`;
       }
       draw() {
-        const screenX = gridOffsetRef.current.x + this.gamePos.x;
-        const screenY = gridOffsetRef.current.y + this.gamePos.y;
         c.beginPath();
-        c.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
+        c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
         c.fillStyle = "white";
         c.fill();
         c.closePath();
       }
     }
 
-    // --- Collections for game objects ---
+    // Hold game objects.
     const remotePlayers = new Map();
     const pellets = [];
     const boundaries = [];
 
-    // Local player.
-    const localPlayerGamePos = { x: CELL_SIZE * 1.5, y: CELL_SIZE * 1.5 };
     const localPlayerId = localPlayerIdRef.current;
-    const localPlayerColor =
-      initialPlayer?.color || `hsl(${Math.random() * 360}, 70%, 60%)`;
+    const localPlayerColor = `hsl(${Math.random() * 360}, 70%, 60%)`;
+    // Initial position will be set in loadMap.
     const localPlayer = new Player({
       id: localPlayerId,
-      gamePos: { ...localPlayerGamePos },
+      position: { x: 0, y: 0 },
       velocity: { x: 0, y: 0 },
       color: localPlayerColor,
       isLocal: true,
-      score: initialPlayer?.score || 0,
-    });
-    saveLocalPlayer({
-      id: localPlayer.id,
-      color: localPlayer.color,
-      score: localPlayer.score,
+      score: 0,
     });
 
     const keys = {
@@ -152,94 +107,107 @@ function App() {
       d: { pressed: false },
     };
 
-    // --- WebSocket Setup ---
-    const socket = new WebSocket(WS_URL);
-    const handleBeforeUnload = () => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "disconnect", id: localPlayer.id }));
-      }
-    };
-    // Process remote combined state messages.
+    // Create the WebSocket.
+    const socket = new WebSocket("ws://localhost:8082/ws");
+    // Promise that resolves when the socket is open.
+    const socketOpenPromise = new Promise((resolve) => {
+      socket.addEventListener("open", () => {
+        console.log("WebSocket connected");
+        // Send relative position (absolute - gridOffset). (At this point gridOffset is still {0,0}.)
+        socket.send(
+          JSON.stringify({
+            type: "new_player",
+            id: localPlayerId,
+            color: localPlayerColor,
+            score: localPlayer.score,
+            position: {
+              x: localPlayer.position.x - gridOffsetRef.current.x,
+              y: localPlayer.position.y - gridOffsetRef.current.y,
+            },
+          })
+        );
+        resolve();
+      });
+    });
+
+    // Process remote messages in a separate function.
     function processRemoteMessage(messageData) {
-      try {
-        const data = JSON.parse(messageData);
-        // Update remote players.
-        if (data.players) {
-          Object.entries(data.players).forEach(([id, playerData]) => {
-            if (id === localPlayer.id) {
-              // Optionally ignore remote updates for the local player.
-              return;
-            }
-            const gamePos = { ...playerData.position };
-            if (!remotePlayers.has(id)) {
-              remotePlayers.set(
-                id,
-                new Player({
-                  id,
-                  gamePos,
-                  velocity: playerData.velocity,
-                  color:
-                    playerData.color ||
-                    `hsl(${Math.random() * 360}, 70%, 60%)`,
-                  isLocal: false,
-                  score: playerData.score || 0,
-                })
-              );
-            } else {
-              const remotePlayer = remotePlayers.get(id);
-              remotePlayer.lastUpdate = Date.now();
-              if (
-                Math.abs(gamePos.x - remotePlayer.targetGamePos.x) > 5 ||
-                Math.abs(gamePos.y - remotePlayer.targetGamePos.y) > 5
-              ) {
-                remotePlayer.targetGamePos = { ...gamePos };
-              }
-              remotePlayer.velocity = playerData.velocity;
-              remotePlayer.score = playerData.score || remotePlayer.score;
-            }
-          });
-          updateScoreboard();
-        }
-    
-        // Process the eatenPellets array (IDs of pellets to delete).
-        if (data.eatenPellets && Array.isArray(data.eatenPellets)) {
-          data.eatenPellets.forEach((pelletId) => {
-            for (let i = pellets.length - 1; i >= 0; i--) {
-              if (pellets[i].id === pelletId) {
-                pellets.splice(i, 1);
-                break;
-              }
-            }
-          });
-        }
-      } catch (err) {
-        console.error("Error processing remote message:", err, messageData);
+      const data = JSON.parse(messageData);
+      // Update pellets.
+      if (data.pellets) {
+        pellets.length = 0;
+        data.pellets.forEach((pelletData) => {
+          // pelletData.position is relative; convert to absolute.
+          const absPos = {
+            x: gridOffsetRef.current.x + pelletData.position.x,
+            y: gridOffsetRef.current.y + pelletData.position.y,
+          };
+          pellets.push(new Pellet({ position: absPos }));
+        });
       }
+      // Update players.
+      // Update players state.
+if (data.players) {
+  Object.entries(data.players).forEach(([id, playerData]) => {
+    if (id === localPlayerId) {
+      // Update local player's score.
+      localPlayer.score = playerData.score || localPlayer.score;
+      scoreEl.innerHTML = localPlayer.score;
+      return;
+    }
+    // Convert relative position to absolute.
+    const absPos = {
+      x: gridOffsetRef.current.x + playerData.position.x,
+      y: gridOffsetRef.current.y + playerData.position.y,
+    };
+    if (!remotePlayers.has(id)) {
+      remotePlayers.set(
+        id,
+        new Player({
+          id,
+          position: absPos,
+          velocity: playerData.velocity,
+          color:
+            playerData.color ||
+            `hsl(${Math.random() * 360}, 70%, 60%)`,
+          isLocal: false,
+          score: playerData.score || 0,
+        })
+      );
+    } else {
+      const remotePlayer = remotePlayers.get(id);
+      // Compute the distance between the current and new position.
+      const dx = absPos.x - remotePlayer.position.x;
+      const dy = absPos.y - remotePlayer.position.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const THRESHOLD = 100; // pixels
+
+      // If the difference is too big, snap to the new position.
+      if (distance > THRESHOLD) {
+        remotePlayer.position = { ...absPos };
+        remotePlayer.targetPosition = { ...absPos };
+      } else {
+        remotePlayer.targetPosition = absPos;
+      }
+      remotePlayer.velocity = playerData.velocity;
+      remotePlayer.score = playerData.score || remotePlayer.score;
+    }
+  });
+}
+      updateScoreboard();
     }
 
+    // Register remote message handler.
     socket.addEventListener("message", (event) => {
-      if (!mapLoadedRef.current) {
+      // If the map isn't loaded yet, queue the message.
+      if (!mapLoaded) {
         remoteMessageQueue.push(event.data);
       } else {
         processRemoteMessage(event.data);
       }
     });
 
-    socket.addEventListener("open", () => {
-      console.log("WebSocket connected");
-    });
-
-    // Close WebSocket only when the tab is closed.
-    window.addEventListener("beforeunload", () => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({ type: "disconnect", id: localPlayer.id })
-        );
-        socket.close();
-      }
-    });
-
-    let lastScoreboardHTML = "";
+    // Update the scoreboard display.
     function updateScoreboard() {
       let html = `<h3>Players</h3><ul>`;
       html += `<li>${localPlayer.id} (You): ${localPlayer.score}</li>`;
@@ -247,146 +215,86 @@ function App() {
         html += `<li>${player.id}: ${player.score}</li>`;
       });
       html += `</ul>`;
-      
-      if (scoreboardRef.current && html !== lastScoreboardHTML) {
-        scoreboardRef.current.innerHTML = html;
-        lastScoreboardHTML = html;
-      }
+      scoreboardEl.innerHTML = html;
     }
 
-    function collisionDetection({ gamePos, boundary }) {
+    function collisionDetection({ player, boundary, velocity }) {
+      const vx = velocity?.x ?? player.velocity.x;
+      const vy = velocity?.y ?? player.velocity.y;
       return (
-        gamePos.y - localPlayer.radius <= boundary.gamePos.y + boundary.height &&
-        gamePos.x + localPlayer.radius >= boundary.gamePos.x &&
-        gamePos.y + localPlayer.radius >= boundary.gamePos.y &&
-        gamePos.x - localPlayer.radius <= boundary.gamePos.x + boundary.width
+        player.position.y - player.radius + vy <=
+          boundary.position.y + boundary.height &&
+        player.position.x + player.radius + vx >= boundary.position.x &&
+        player.position.y + player.radius + vy >= boundary.position.y &&
+        player.position.x - player.radius + vx <=
+          boundary.position.x + boundary.width
       );
     }
 
     async function loadMap() {
       try {
-        const res = await fetch(CHUCK_URL);
-        if (!res.ok) {
-          console.error("Failed to fetch map, status:", res.status);
-          return;
-        }
+        const res = await fetch("http://localhost:8082/getMap");
         const map = await res.json();
-        setLocalMap(map);
-
+        // Compute grid dimensions and offsets to center the map.
         const rows = map.length;
         const cols = map[0].length;
-        const gridWidth = cols * CELL_SIZE;
-        const gridHeight = rows * CELL_SIZE;
+        const gridWidth = cols * Boundary.width;
+        const gridHeight = rows * Boundary.height;
         const offsetX = (canvas.width - gridWidth) / 2;
         const offsetY = (canvas.height - gridHeight) / 2;
         gridOffsetRef.current = { x: offsetX, y: offsetY };
-
-        boundaries.length = 0;
-        pellets.length = 0;
+        // Set local player's initial absolute position.
+        localPlayer.position = {
+          x: offsetX + Boundary.width * 1.5,
+          y: offsetY + Boundary.height * 1.5,
+        };
+        // If any remote players were created before map load, adjust them.
+        remotePlayers.forEach((player) => {
+          player.position.x += offsetX;
+          player.position.y += offsetY;
+          player.targetPosition.x += offsetX;
+          player.targetPosition.y += offsetY;
+        });
+        // Build boundaries and pellets.
         map.forEach((row, i) => {
           row.forEach((symbol, j) => {
             if (symbol === "1") {
               boundaries.push(
-                new Boundary({ gamePos: { x: j * CELL_SIZE, y: i * CELL_SIZE } })
-              );
-            } else if (symbol === "0") {
-              pellets.push(
-                new Pellet({
-                  gamePos: {
-                    x: j * CELL_SIZE + CELL_SIZE / 2,
-                    y: i * CELL_SIZE + CELL_SIZE / 2,
+                new Boundary({
+                  position: {
+                    x: offsetX + Boundary.width * j,
+                    y: offsetY + Boundary.height * i,
                   },
                 })
               );
+            } else if (symbol === "0") {
+              const pellet = new Pellet({
+                position: {
+                  x: offsetX + Boundary.width * j + Boundary.width / 2,
+                  y: offsetY + Boundary.height * i + Boundary.height / 2,
+                },
+              });
+              pellets.push(pellet);
             }
           });
         });
-
-        setMapLoaded(true);
-        remoteMessageQueue.forEach((msg) => processRemoteMessage(msg));
+        // Mark map as loaded.
+        mapLoaded = true;
+        // Process any queued remote messages.
+        remoteMessageQueue.forEach((msg) => {
+          processRemoteMessage(msg);
+        });
         remoteMessageQueue = [];
-
-        // Now send the new player message using the envelope format.
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(
-            JSON.stringify({
-              type: "player",
-              data: {
-                id: localPlayer.id,
-                color: localPlayer.color,
-                score: localPlayer.score,
-                position: { ...localPlayer.gamePos },
-                velocity: localPlayer.velocity,
-              },
-            })
-          );
-        }
       } catch (err) {
         console.error("Error loading map:", err);
       }
     }
 
-    async function reloadMap() {
-      setMapLoaded(false);
-      boundaries.length = 0;
-      pellets.length = 0;
-      await loadMap();
-      console.log("Map reloaded");
-    }
-
-    function sendPlayerUpdate() {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({
-            type: "player",
-            data: {
-              id: localPlayer.id,
-              position: { ...localPlayer.gamePos },
-              velocity: localPlayer.velocity,
-              color: localPlayer.color,
-              score: localPlayer.score,
-            },
-          })
-        );
-      }
-    }
-
-    const handleKeyDown = ({ key }) => {
-      if (keys[key]) {
-        if (!keys[key].pressed) {
-          keys[key].pressed = true;
-          sendPlayerUpdate();
-        }
-      }
-    };
-    const handleKeyUp = ({ key }) => {
-      if (keys[key]) {
-        keys[key].pressed = false;
-        sendPlayerUpdate();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-
-    const handleResize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      reloadMap();
-    };
-    window.addEventListener("resize", handleResize);
-
-    window.reloadMap = reloadMap;
-
-    let animationFrameId;
-    let lastFrameTime = performance.now();
-    let previousGamePos = { ...localPlayer.gamePos };
+    let lastSentTime = 0;
+    const SEND_INTERVAL = 100;
 
     function animate() {
-      animationFrameId = requestAnimationFrame(animate);
-      const now = performance.now();
-      const rawDelta = (now - lastFrameTime) / 1000;
-      const delta = Math.min(rawDelta, 0.05);
-      lastFrameTime = now;
+      requestAnimationFrame(animate);
       c.clearRect(0, 0, canvas.width, canvas.height);
 
       let vx = localPlayer.velocity.x;
@@ -396,63 +304,51 @@ function App() {
       if (keys.a.pressed) vx = -6;
       if (keys.d.pressed) vx = 6;
 
-      const newGamePos = {
-        x: localPlayer.gamePos.x + vx,
-        y: localPlayer.gamePos.y + vy,
-      };
-
       let blockedX = false;
       let blockedY = false;
       for (const boundary of boundaries) {
         if (
           collisionDetection({
-            gamePos: { x: newGamePos.x, y: localPlayer.gamePos.y },
+            player: localPlayer,
             boundary,
+            velocity: { x: vx, y: 0 },
           })
         )
           blockedX = true;
         if (
           collisionDetection({
-            gamePos: { x: localPlayer.gamePos.x, y: newGamePos.y },
+            player: localPlayer,
             boundary,
+            velocity: { x: 0, y: vy },
           })
         )
           blockedY = true;
       }
       localPlayer.velocity.x = blockedX ? 0 : vx;
       localPlayer.velocity.y = blockedY ? 0 : vy;
-      localPlayer.gamePos.x += localPlayer.velocity.x;
-      localPlayer.gamePos.y += localPlayer.velocity.y;
 
-      const posChanged =
-        Math.abs(localPlayer.gamePos.x - previousGamePos.x) > 5 ||
-        Math.abs(localPlayer.gamePos.y - previousGamePos.y) > 5;
-      if (posChanged) {
-        sendPlayerUpdate();
-        previousGamePos = { ...localPlayer.gamePos };
-      }
-
+      // Check collision with pellets.
       for (let i = pellets.length - 1; i >= 0; i--) {
         const pellet = pellets[i];
+        pellet.draw();
         if (
           Math.hypot(
-            pellet.gamePos.x - localPlayer.gamePos.x,
-            pellet.gamePos.y - localPlayer.gamePos.y
+            pellet.position.x - localPlayer.position.x,
+            pellet.position.y - localPlayer.position.y
           ) < pellet.radius + localPlayer.radius
         ) {
           pellets.splice(i, 1);
           localPlayer.score += 10;
-          if (scoreEl) scoreEl.innerHTML = localPlayer.score;
+          scoreEl.innerHTML = localPlayer.score;
           updateScoreboard();
+          // Inform the server that the pellet was eaten.
           if (socket.readyState === WebSocket.OPEN) {
             socket.send(
               JSON.stringify({
-                type: "pellet",
-                data: {
-                  pelletId: pellet.id,
-                  id: localPlayer.id,
-                  score: localPlayer.score,
-                },
+                type: "pellet_eaten",
+                pelletId: pellet.id,
+                id: localPlayer.id,
+                score: localPlayer.score,
               })
             );
           }
@@ -460,48 +356,53 @@ function App() {
       }
 
       boundaries.forEach((b) => b.draw());
-      pellets.forEach((p) => p.draw());
+
+      localPlayer.position.x += localPlayer.velocity.x;
+      localPlayer.position.y += localPlayer.velocity.y;
       localPlayer.draw();
 
-      const currentTime = Date.now();
-      for (const [id, player] of remotePlayers) {
-        if (currentTime - player.lastUpdate > 3000) {
-          remotePlayers.delete(id);
-        }
+      // Send local player state periodically, using relative coordinates.
+      if (
+        Date.now() - lastSentTime > SEND_INTERVAL &&
+        socket.readyState === WebSocket.OPEN
+      ) {
+        socket.send(
+          JSON.stringify({
+            id: localPlayer.id,
+            position: {
+              x: localPlayer.position.x - gridOffsetRef.current.x,
+              y: localPlayer.position.y - gridOffsetRef.current.y,
+            },
+            velocity: localPlayer.velocity,
+            color: localPlayer.color,
+            score: localPlayer.score,
+          })
+        );
+        lastSentTime = Date.now();
       }
+
       remotePlayers.forEach((player) => {
-        player.update(delta);
+        player.update();
       });
     }
-
-    Promise.all([
-      new Promise((resolve) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          resolve();
-        } else {
-          socket.addEventListener("open", resolve);
-        }
-      }),
-      loadMap(),
-    ]).then(() => {
-      animate();
+    window.addEventListener("keydown", ({ key }) => {
+      if (keys[key]) {
+        keys[key].pressed = true;
+      }
+    });
+    window.addEventListener("keyup", ({ key }) => {
+      if (keys[key]) keys[key].pressed = false;
     });
 
-    return () => {
-      cancelAnimationFrame(animationFrameId);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      window.removeEventListener("resize", handleResize);
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close();
-      }
-      delete window.reloadMap;
-    };
+    // Start animation only after the socket is open and the map is loaded.
+    Promise.all([socketOpenPromise, loadMap()]).then(() => {
+      animate();
+    });
   }, []);
 
   return (
     <div>
+      {/* Score displayed at top-right and scoreboard at top-left */}
       <div
         id="scoreEl"
         ref={scoreElRef}
@@ -531,10 +432,6 @@ function App() {
         }}
       ></div>
       <canvas ref={canvasRef} />
-      <button onClick={() => window.reloadMap && window.reloadMap()}>
-        Reload Map
-      </button>
-      <GlobalLeaderboard />
     </div>
   );
 }

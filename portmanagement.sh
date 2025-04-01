@@ -1,5 +1,6 @@
 # Port forward the access port for the central server to :6441 which is open
 kubectl config use-context kind-central
+nohup kubectl port-forward --address 0.0.0.0 svc/mongodb 6455:27017 > central-server-db-port.log 2>&1 &
 nohup kubectl port-forward --address 0.0.0.0 svc/pacman-central 6441:80 > central-server-port.log 2>&1 &
 
 # Port forward caddy ports for chunk servers to ports in the range 36000-37000
@@ -17,3 +18,9 @@ nohup kubectl port-forward --address 0.0.0.0 svc/caddy 36402:443 > caddy-2-https
 kubectl config use-context kind-chunk3
 nohup kubectl port-forward --address 0.0.0.0 svc/caddy 36803:80 > caddy-3-http-port.log 2>&1 &
 nohup kubectl port-forward --address 0.0.0.0 svc/caddy 36403:443 > caddy-3-https-port.log 2>&1 &
+
+# Port forward kafka, to be managed by caddy
+kubectl config use-context kind-kafka
+nohup kubectl port-forward -n kafka --address 0.0.0.0 svc/kafka-broker 6442:9092 > kafka-port.log 2>&1 &
+nohup kubectl port-forward -n kafka --address 0.0.0.0 svc/akhq 6450:9092 > kafka-gui-port.log 2>&1 &
+ 
