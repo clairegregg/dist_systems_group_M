@@ -1,31 +1,37 @@
 package main
 
 import (
-	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Cormuckle/dist_systems_group_M/chunk_server/kafka"
+	"github.com/Cormuckle/dist_systems_group_M/chunk_server/playerstate"
+	"github.com/Cormuckle/dist_systems_group_M/chunk_server/websocket"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
-// Global variables.
 var (
-	kafkaProducer  *kafka.Producer
-	kafkaConsumer  *kafka.Consumer
-	db             = make(map[string]string)
-	chunkID        string
-	chunkTopic     string
-	centralTopic   = "chunk_to_central"
-	broadcastTopic = "central_to_chunk_broadcast"
+	kafkaProducer   *kafka.Producer
+	kafkaConsumer   *kafka.Consumer // main consumer for other messages
+	db              = make(map[string]string)
+	chunkID         string
+	chunkTopic      string
+	centralTopic    = "chunk_to_central"
+	broadcastTopic  = "central_to_chunk_broadcast"
+	localMap        [][]string // holds the 2D map in memory
+	chunkCoordinate string     // the raw coordinate for this chunk server (e.g. "0,0")
+	// We'll store the Kafka broker address in a global variable for use in requestMap.
+	kafkaBroker string
 )
 
-// generateChunkID generates a unique chunk server ID based on hostname or timestamp.
 func generateChunkID() string {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -34,17 +40,15 @@ func generateChunkID() string {
 	return hostname
 }
 
-// setupRouter sets up HTTP routes for the chunk server.
 func setupRouter() *gin.Engine {
 	r := gin.Default()
-
+	r.Use(cors.Default())
 	// Health check endpoint.
 	r.GET("/ping", func(c *gin.Context) {
 		c.String(http.StatusOK, "pong")
 	})
-    // Get user value
 	r.GET("/user/:name", func(c *gin.Context) {
-		user := c.Params.ByName("name")
+		user := c.Param("name")
 		value, ok := db[user]
 		if ok {
 			c.JSON(http.StatusOK, gin.H{"user": user, "value": value})
@@ -52,52 +56,20 @@ func setupRouter() *gin.Engine {
 			c.JSON(http.StatusOK, gin.H{"user": user, "status": "no value"})
 		}
 	})
-
-	// Authorized group (uses gin.BasicAuth() middleware)
-	// Same than:
-	// authorized := r.Group("/")
-	// authorized.Use(gin.BasicAuth(gin.Credentials{
-	//	  "foo":  "bar",
-	//	  "manu": "123",
-	//}))
 	authorized := r.Group("/", gin.BasicAuth(gin.Accounts{
-		"foo":  "bar", // user:foo password:bar
-		"manu": "123", // user:manu password:123
+		"foo":  "bar",
+		"manu": "123",
 	}))
-
-
-	/* example curl for /admin with basicauth header
-	   Zm9vOmJhcg== is base64("foo:bar")
-
-		curl -X POST \
-	  	http://localhost:8080/admin \
-	  	-H 'authorization: Basic Zm9vOmJhcg==' \
-	  	-H 'content-type: application/json' \
-	  	-d '{"value":"bar"}'
-	*/
 	authorized.POST("admin", func(c *gin.Context) {
 		user := c.MustGet(gin.AuthUserKey).(string)
-
-		// Parse JSON
-		var json struct {
+		var jsonData struct {
 			Value string `json:"value" binding:"required"`
 		}
-
-		if c.Bind(&json) == nil {
-			db[user] = json.Value
+		if c.Bind(&jsonData) == nil {
+			db[user] = jsonData.Value
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		}
 	})
-	
-	// Endpoint to send a message to the central server.
-	// This is just for tesing purpose but we can use this function iternally to communicate
-	/* 
-	
-	  curl -X POST http://<chunk_server_host>:8080/send \
-     -H "Content-Type: application/json" \
-     -d '{"message": "Hello from chunk server"}' 
-	 
-	 */
 	r.POST("/send", func(c *gin.Context) {
 		var req struct {
 			Message string `json:"message" binding:"required"`
@@ -106,7 +78,6 @@ func setupRouter() *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
-
 		err := kafkaProducer.SendMessage(centralTopic, fmt.Sprintf("[%s]: %s", chunkID, req.Message))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"status": "Failed to send"})
@@ -114,101 +85,215 @@ func setupRouter() *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "Message sent to central server"})
 	})
-
+	r.GET("/ws", func(c *gin.Context) {
+		websocket.WSHandler(c.Writer, c.Request)
+	})
+	// Expose the locally stored map.
+	r.GET("/getMap", func(c *gin.Context) {
+		if localMap == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "map not loaded"})
+		} else {
+			c.JSON(http.StatusOK, localMap)
+		}
+	})
 	return r
 }
 
-// consumeMessages continuously polls Kafka for messages on the broadcast and chunk topics.
-func consumeMessages() {
-	topics := []string{chunkTopic, broadcastTopic}
-	log.Printf("Chunk Server [%s] is now listening on topics: %v", chunkID, topics)
+// requestMap uses a dedicated consumer to request and receive the map from the central server.
+func waitForCentralServer(centralURL string) {
+	for {
+		resp, err := http.Get(centralURL + "/ping")
+		if err == nil && resp.StatusCode == http.StatusOK {
+			log.Printf("Central server is up at %s", centralURL)
+			return
+		}
+		log.Printf("Central server not ready at %s. Retrying in 5 seconds...", centralURL)
+		time.Sleep(5 * time.Second)
+	}
+}
 
-	// Launch a separate goroutine for each topic.
+func requestMap() {
+	// Optionally, get the central server URL from env (default if not set)
+	centralURL := os.Getenv("CENTRAL_SERVER_URL")
+	if centralURL == "" {
+		centralURL = "http://central_server:8080" // adjust as needed
+	}
+	// Wait until the central server is available.
+	waitForCentralServer(centralURL)
+
+	// Create a dedicated consumer for map responses using a unique group id.
+	mapConsumer, err := kafka.NewConsumer(kafkaBroker, chunkID+"_map")
+	if err != nil {
+		log.Fatalf("Failed to create map consumer: %v", err)
+	}
+	defer mapConsumer.Close()
+
+	for {
+		// Send the raw coordinate (with comma) so the central server can look it up.
+		requestMsg := fmt.Sprintf("GET_MAP:%s", chunkCoordinate)
+		err := kafkaProducer.SendMessage(centralTopic, requestMsg)
+		if err != nil {
+			log.Printf("Failed to send map request: %v", err)
+		} else {
+			log.Printf("Sent map request for coordinate %s", chunkCoordinate)
+		}
+		// Try to consume a message on our dedicated consumer from our chunk topic.
+		msg, err := mapConsumer.ConsumeMessage(chunkTopic)
+		if err != nil {
+			log.Printf("Error consuming map response: %v", err)
+		} else {
+			if strings.HasPrefix(msg, "MAP_RESPONSE:") {
+				mapJSON := strings.TrimPrefix(msg, "MAP_RESPONSE:")
+				var receivedMap [][]string
+				err = json.Unmarshal([]byte(mapJSON), &receivedMap)
+				if err == nil {
+					localMap = receivedMap
+					log.Printf("Received map for coordinate %s:", chunkCoordinate)
+					for i, row := range localMap {
+						log.Printf("Row %d: %v", i, row)
+					}
+					return
+				} else {
+					log.Printf("Error unmarshaling map: %v", err)
+				}
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func consumeMessages() {
+	// Listen on both the unique chunk topic (coordinate-based) and the broadcast topic.
+	topics := []string{chunkTopic, broadcastTopic}
+	log.Printf("Chunk Server [%s] listening on topics: %v", chunkID, topics)
 	for _, topic := range topics {
 		go func(t string) {
 			for {
-				// ConsumeMessage should be implemented to consume from a single topic.
 				message, err := kafkaConsumer.ConsumeMessage(t)
 				if err != nil {
 					log.Printf("Error consuming from topic %s: %v", t, err)
-					time.Sleep(2 * time.Second) // Retry after 2 seconds.
+					time.Sleep(2 * time.Second)
 					continue
 				}
 				log.Printf("Received message on [%s]: %s", t, message)
 			}
 		}(topic)
 	}
-
-	// Prevent main goroutine from exiting.
-	select {}
-}
-
-// notifyCentralServer sends a registration request to the central server.
-// It returns an error if registration fails.
-func notifyCentralServer() error {
-	centralServerURL := "http://central_server:8080/register_chunk"
-	payload := fmt.Sprintf(`{"chunk_id": "%s"}`, chunkID)
-	req, err := http.NewRequest("POST", centralServerURL, bytes.NewBuffer([]byte(payload)))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to notify central server: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		log.Println("Chunk ID successfully registered with central server")
-		return nil
-	}
-	return fmt.Errorf("failed to register chunk with central server, status: %d", resp.StatusCode)
+	select {} // Keep the goroutines running.
 }
 
 func main() {
-	// Generate a unique chunk server ID and topic.
-	chunkID = generateChunkID()
-	chunkTopic = fmt.Sprintf("central_to_chunk_%s", chunkID)
-	log.Printf("Chunk ID: %s", chunkID)
-	log.Printf("Chunk topic: %s", chunkTopic)
-
-	// Kafka broker setup.
-	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
+	// Set kafkaBroker from environment variable.
+	kafkaBroker = os.Getenv("KAFKA_BOOTSTRAP_SERVER")
 	if kafkaBroker == "" {
-		kafkaBroker = "kafka:9092" // Default Kafka broker address.
+		kafkaBroker = "kafka:9092"
 	}
 
-	// Initialize Kafka Producer.
+	// Generate the chunk server's unique ID.
+	chunkID = generateChunkID()
+
+	// Read the raw coordinate from environment variable and remove any double quotes.
+	rawCoord := os.Getenv("CHUNK_COORDINATE")
+	if rawCoord == "" {
+		log.Println("CHUNK_COORDINATE not found in env; using default coordinate '0,0'")
+		rawCoord = "0,0"
+	} else {
+		rawCoord = strings.ReplaceAll(rawCoord, "\"", "")
+	}
+	// Use the cleaned raw coordinate for map requests.
+	chunkCoordinate = rawCoord
+	// For the Kafka topic name, replace commas with underscores.
+	chunkTopic = fmt.Sprintf("central_to_chunk_%s", strings.ReplaceAll(rawCoord, ",", "_"))
+	log.Printf("Chunk ID: %s", chunkID)
+	log.Printf("Chunk topic: %s", chunkTopic)
+	// Initialize Kafka producer.
 	producer, err := kafka.NewProducer(kafkaBroker)
 	if err != nil {
 		log.Fatalf("Failed to initialize Kafka producer: %v", err)
 	}
 	kafkaProducer = producer
 
-	// Create topic for this chunk server.
+	// Create the Kafka topic for this chunk server.
 	err = kafkaProducer.CreateTopic(chunkTopic)
 	if err != nil {
 		log.Fatalf("Failed to create Kafka topic: %v", err)
 	}
 	log.Printf("Kafka topic '%s' created", chunkTopic)
 
-	// Initialize Kafka Consumer.
+	// Initialize main Kafka consumer.
 	consumer, err := kafka.NewConsumer(kafkaBroker, chunkID)
 	if err != nil {
 		log.Fatalf("Failed to initialize Kafka consumer: %v", err)
 	}
 	kafkaConsumer = consumer
 
-	// Notify the central server of registration.
-	if err := notifyCentralServer(); err != nil {
-		log.Fatalf("Registration failed: %v", err)
+	// Notify central server that this chunk server is connected.
+	msg := fmt.Sprintf("Chunk server with coordinate [%s] and ID [%s] is connected", chunkCoordinate, chunkID)
+	err = kafkaProducer.SendMessage(centralTopic, msg)
+	if err != nil {
+		log.Printf("Failed to notify central server via Kafka: %v", err)
+	} else {
+		log.Printf("Notified central server: %s", msg)
 	}
 
-	// Once successfully registered, start consuming messages.
+	// Request the map from central server using the dedicated consumer.
+	go requestMap()
+
+	// Start consuming Kafka messages on the main consumer.
 	go consumeMessages()
+
+	// Start a ticker to broadcast game state to connected WebSocket clients.
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			websocket.BroadcastGameState()
+		}
+	}()
+
+	// Instead of sending aggregated player state on a fixed frequency,
+	// we track the last sent state and only send an update when there is a change.
+	type PlayerUpdate struct {
+		UserName string `json:"userName"`
+		Score    int    `json:"score"`
+		Status   string `json:"status"`
+	}
+	lastSentStates := make(map[string]PlayerUpdate)
+
+	go func() {
+		// We can still check periodically (every second) for any state changes.
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			players := playerstate.GetGameState()
+			for _, ps := range players {
+				// Create the update for this player.
+				update := PlayerUpdate{
+					UserName: ps.ID,
+					Score:    ps.Score,
+					Status:   ps.Status,
+				}
+				// Check if we have a previously sent state.
+				last, ok := lastSentStates[ps.ID]
+				// If no previous state exists or if any field has changed, send an update.
+				if !ok || last.Score != update.Score || last.Status != update.Status {
+					msgData, err := json.Marshal(update)
+					if err != nil {
+						log.Printf("Error marshaling player update: %v", err)
+						continue
+					}
+					err = kafkaProducer.SendMessage(centralTopic, string(msgData))
+					if err != nil {
+						log.Printf("Error sending player update to central: %v", err)
+						continue
+					}
+					// Update the cache.
+					lastSentStates[ps.ID] = update
+					log.Printf("Sent update for player %s: %v", ps.ID, update)
+				}
+			}
+		}
+	}()
 
 	// Graceful shutdown handling.
 	go func() {
@@ -216,12 +301,11 @@ func main() {
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 		<-sigChan
 		log.Println("Shutting down Chunk Server...")
-		producer.Close()
-		consumer.Close()
+		kafkaProducer.Close()
+		kafkaConsumer.Close()
 		os.Exit(0)
 	}()
 
-	// Start the HTTP server.
 	r := setupRouter()
 	r.Run(":8080")
 }

@@ -90,6 +90,7 @@ services:
     environment:
       - MONGO_URI=mongodb://root:example@mongo:27017/?authSource=admin
       - KAFKA_BOOTSTRAP_SERVER=kafka:9092
+      - CHUNK_COORDINATE="0,0"
     depends_on:
       kafka:
         condition: service_healthy
@@ -110,6 +111,7 @@ services:
     environment:
       - MONGO_URI=mongodb://root:example@mongo:27017/?authSource=admin
       - KAFKA_BOOTSTRAP_SERVER=kafka:9092
+      - CHUNK_COORDINATE="0,1"
     depends_on:
       kafka:
         condition: service_healthy

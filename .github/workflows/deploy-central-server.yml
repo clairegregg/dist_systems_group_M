@@ -23,10 +23,29 @@ jobs:
       with:
         method: kubeconfig
         kubeconfig: ${{ secrets.CENTRAL_SERVER_KUBECONFIG }}
+    - name: Pass in cluster secrets
+      uses: nowactions/envsubst@v1
+      with:
+        input: ./central_server/k8s/pacman-central.yaml
+        output: ./central_server/k8s/new-pacman-central.yaml
+      env:
+        CHUNK1_CERT_AUTH: ${{ secrets.CHUNK1_CERT_AUTH }}
+        CHUNK1_CERT_DATA: ${{ secrets.CHUNK1_CERT_DATA }}
+        CHUNK1_KEY_DATA: ${{ secrets.CHUNK1_KEY_DATA }}
+        CHUNK1_SERVER: ${{ vars.CHUNK1_SERVER }}
+        CHUNK2_CERT_AUTH: ${{ secrets.CHUNK2_CERT_AUTH }}
+        CHUNK2_CERT_DATA: ${{ secrets.CHUNK2_CERT_DATA }}
+        CHUNK2_KEY_DATA: ${{ secrets.CHUNK2_KEY_DATA }}
+        CHUNK2_SERVER: ${{ vars.CHUNK2_SERVER }}
+        CHUNK3_CERT_AUTH: ${{ secrets.CHUNK3_CERT_AUTH }}
+        CHUNK3_CERT_DATA: ${{ secrets.CHUNK3_CERT_DATA }}
+        CHUNK3_KEY_DATA: ${{ secrets.CHUNK3_KEY_DATA }}
+        CHUNK3_SERVER: ${{ vars.CHUNK3_SERVER }}
     - name: Deploy to K8s cluster
       uses: azure/k8s-deploy@v5
       with:
         action: deploy
         manifests: |
-          central_server/k8s
+          central_server/k8s/mongodb.yaml
+          central_server/k8s/new-pacman-central.yaml
 

@@ -1,297 +1,542 @@
-//import Canvas from "./Canvas/Canvas";
-import Maps from "./maps"
+import React, { useEffect, useRef, useState } from "react";
+import GlobalLeaderboard from "./GlobalLeaderboard";
+
 
 function App() {
-  // Getting the HTML canvas element
-  const canvas = document.querySelector('canvas')
-  const c = canvas.getContext('2d')
+  const WS_URL = "ws://localhost:8082/ws";
+  const CHUCK_URL = "http://localhost:8082/getMap"
+  const CENTRAL_URL = "http://localhost:8080/"
+  // Refs for canvas and scoreboard elements.
+  const canvasRef = useRef(null);
+  const scoreElRef = useRef(null);
+  const scoreboardRef = useRef(null);
+  // Use sessionStorage so that the player ID persists across refreshes but clears when the tab is closed.
+  const storedPlayer = sessionStorage.getItem("localPlayer");
+  const initialPlayer = storedPlayer ? JSON.parse(storedPlayer) : null;
+  // If an ID already exists, use it; otherwise, generate a new one.
+  const localPlayerIdRef = useRef(
+    initialPlayer?.id ||
+      Date.now().toString() + Math.random().toString(36).substring(2)
+  );
+  
+  // gridOffsetRef translates game world coordinates into screen coordinates.
+  const gridOffsetRef = useRef({ x: 0, y: 0 });
 
-  const scoreEl = document.querySelector('#scoreEl')
+  // State for map and loaded flag.
+  const [localMap, setLocalMap] = useState([]);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const mapLoadedRef = useRef(mapLoaded);
+  useEffect(() => {
+    mapLoadedRef.current = mapLoaded;
+  }, [mapLoaded]);
 
-  // Setting the width and height of the canvas to match the window sizes
-  canvas.width = window.innerWidth
-  canvas.height = window.innerHeight
-
-  // Boundary class, used for walls of the level
-  class Boundary {
-    // Setting the size of each boundary tile
-    static width = 40;
-    static height = 40;
-
-    constructor({ position }) {
-      this.position = position
-      this.width = 40
-      this.height = 40
-    }
-
-    // Draw function for boundary, this displays each boundary on the screen when called
-    draw() {
-      c.fillStyle = 'blue'
-      c.fillRect(this.position.x, this.position.y, this.width, this.height)
-    }
+  // Persist local player data in sessionStorage.
+  function saveLocalPlayer(player) {
+    sessionStorage.setItem("localPlayer", JSON.stringify(player));
   }
 
-  // Player class, used for representing the player within the game
-  class Player {
-    constructor({ position, velocity }) {
-      this.position = position
-      this.velocity = velocity
-      this.radius = 15
+  useEffect(() => {
+    // Do NOT clear sessionStorage on beforeunload; this allows the ID to persist through refresh.
+    // Only the WebSocket connection will be closed on unload.
+    
+    const canvas = canvasRef.current;
+    const scoreEl = scoreElRef.current;
+    const scoreboardEl = scoreboardRef.current;
+    const c = canvas.getContext("2d");
+
+    // Set initial canvas dimensions.
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let remoteMessageQueue = [];
+    const CELL_SIZE = 40; // game world cell size
+
+    // --- Classes using game world coordinates ---
+    class Boundary {
+      constructor({ gamePos }) {
+        this.gamePos = gamePos;
+        this.width = CELL_SIZE;
+        this.height = CELL_SIZE;
+      }
+      draw() {
+        const screenX = gridOffsetRef.current.x + this.gamePos.x;
+        const screenY = gridOffsetRef.current.y + this.gamePos.y;
+        c.fillStyle = "blue";
+        c.fillRect(screenX, screenY, this.width, this.height);
+      }
     }
 
-    // Draw function for player, this displays the player as a cirlce
-    draw() {
-      c.beginPath()
-      c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2)
-      c.fillStyle = 'yellow'
-      c.fill()
-      c.closePath()
+    class Player {
+      constructor({ id, gamePos, velocity, color, isLocal, score = 0 }) {
+        this.id = id;
+        this.gamePos = { ...gamePos };
+        this.velocity = velocity;
+        this.radius = 15;
+        this.color = color;
+        this.isLocal = isLocal;
+        this.score = score;
+        this.targetGamePos = { ...gamePos };
+        this.lastUpdate = Date.now();
+      }
+      update(delta) {
+        if (!this.isLocal) {
+          const dx = this.targetGamePos.x - this.gamePos.x;
+          const dy = this.targetGamePos.y - this.gamePos.y;
+          const snapThreshold = 5000;
+          if (Math.abs(dx) > snapThreshold || Math.abs(dy) > snapThreshold) {
+            this.gamePos = { ...this.targetGamePos };
+          } else {
+            const smoothingFactor = 20;
+            this.gamePos.x += dx * delta * smoothingFactor;
+            this.gamePos.y += dy * delta * smoothingFactor;
+          }
+        }
+        this.draw();
+      }
+      draw() {
+        const screenX = gridOffsetRef.current.x + this.gamePos.x;
+        const screenY = gridOffsetRef.current.y + this.gamePos.y;
+        c.beginPath();
+        c.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
+        c.fillStyle = this.color;
+        c.fill();
+        c.closePath();
+      }
     }
 
-    // Update function used for movement of the player within the game
-    update() {
-      this.draw()
-      this.position.x += this.velocity.x
-      this.position.y += this.velocity.y
+    class Pellet {
+      constructor({ gamePos }) {
+        this.gamePos = gamePos;
+        this.radius = 3;
+        this.id = `${gamePos.x}-${gamePos.y}`;
+      }
+      draw() {
+        const screenX = gridOffsetRef.current.x + this.gamePos.x;
+        const screenY = gridOffsetRef.current.y + this.gamePos.y;
+        c.beginPath();
+        c.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
+        c.fillStyle = "white";
+        c.fill();
+        c.closePath();
+      }
     }
-  }
 
-  // Pellet class, used for representing the collectable pellets within the game
-  class Pellet {
-    constructor({ position, velocity }) {
-      this.position = position
-      this.radius = 3
-    }
+    // --- Collections for game objects ---
+    const remotePlayers = new Map();
+    const pellets = [];
+    const boundaries = [];
 
-    // Draw function for pellet, this displays the pellets as a cirlce
-    draw() {
-      c.beginPath()
-      c.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2)
-      c.fillStyle = 'white'
-      c.fill()
-      c.closePath()
-    }
-  }
+    // Local player.
+    const localPlayerGamePos = { x: CELL_SIZE * 1.5, y: CELL_SIZE * 1.5 };
+    const localPlayerId = localPlayerIdRef.current;
+    const localPlayerColor =
+      initialPlayer?.color || `hsl(${Math.random() * 360}, 70%, 60%)`;
+    const localPlayer = new Player({
+      id: localPlayerId,
+      gamePos: { ...localPlayerGamePos },
+      velocity: { x: 0, y: 0 },
+      color: localPlayerColor,
+      isLocal: true,
+      score: initialPlayer?.score || 0,
+    });
+    saveLocalPlayer({
+      id: localPlayer.id,
+      color: localPlayer.color,
+      score: localPlayer.score,
+    });
 
-  const pellets = []
-  const boundaries = []
+    const keys = {
+      w: { pressed: false },
+      a: { pressed: false },
+      s: { pressed: false },
+      d: { pressed: false },
+    };
 
-  // Creating the player instance
-  const player = new Player({
-    position: {
-      x: Boundary.width * 1.5,
-      y: Boundary.height * 1.5
-    },
-    velocity: {
-      x: 0,
-      y: 0
-    }
-  })
-
-  // Keys list, used for collision detection and movement
-  const keys = {
-    w: {
-      pressed: false
-    },
-    a: {
-      pressed: false
-    },
-    s: {
-      pressed: false
-    },
-    d: {
-      pressed: false
-    }
-  }
-
-  let score = 0
-  let lastKey = ''
-
-  // Using maps from the maps.js file to create the level layout
-  Maps.map.forEach((row, i) => {
-    row.forEach((symbol, j) => {
-      switch (symbol) {
-        case '1':
-          boundaries.push(
-            new Boundary({
-              position: {
-                x: Boundary.width * j,
-                y: Boundary.height * i
+    // --- WebSocket Setup ---
+    const socket = new WebSocket(WS_URL);
+    const handleBeforeUnload = () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "disconnect", id: localPlayer.id }));
+      }
+    };
+    // Process remote combined state messages.
+    function processRemoteMessage(messageData) {
+      try {
+        const data = JSON.parse(messageData);
+        // Update remote players.
+        if (data.players) {
+          Object.entries(data.players).forEach(([id, playerData]) => {
+            if (id === localPlayer.id) {
+              // Optionally ignore remote updates for the local player.
+              return;
+            }
+            const gamePos = { ...playerData.position };
+            if (!remotePlayers.has(id)) {
+              remotePlayers.set(
+                id,
+                new Player({
+                  id,
+                  gamePos,
+                  velocity: playerData.velocity,
+                  color:
+                    playerData.color ||
+                    `hsl(${Math.random() * 360}, 70%, 60%)`,
+                  isLocal: false,
+                  score: playerData.score || 0,
+                })
+              );
+            } else {
+              const remotePlayer = remotePlayers.get(id);
+              remotePlayer.lastUpdate = Date.now();
+              if (
+                Math.abs(gamePos.x - remotePlayer.targetGamePos.x) > 5 ||
+                Math.abs(gamePos.y - remotePlayer.targetGamePos.y) > 5
+              ) {
+                remotePlayer.targetGamePos = { ...gamePos };
               }
-            })
-          )
-          break
-        case '0':
-          pellets.push(
-            new Pellet({
-              position: {
-                x: Boundary.width * j + Boundary.width/2,
-                y: Boundary.height * i + Boundary.height/2
+              remotePlayer.velocity = playerData.velocity;
+              remotePlayer.score = playerData.score || remotePlayer.score;
+            }
+          });
+          updateScoreboard();
+        }
+    
+        // Process the eatenPellets array (IDs of pellets to delete).
+        if (data.eatenPellets && Array.isArray(data.eatenPellets)) {
+          data.eatenPellets.forEach((pelletId) => {
+            for (let i = pellets.length - 1; i >= 0; i--) {
+              if (pellets[i].id === pelletId) {
+                pellets.splice(i, 1);
+                break;
               }
+            }
+          });
+        }
+      } catch (err) {
+        console.error("Error processing remote message:", err, messageData);
+      }
+    }
+
+    socket.addEventListener("message", (event) => {
+      if (!mapLoadedRef.current) {
+        remoteMessageQueue.push(event.data);
+      } else {
+        processRemoteMessage(event.data);
+      }
+    });
+
+    socket.addEventListener("open", () => {
+      console.log("WebSocket connected");
+    });
+
+    // Close WebSocket only when the tab is closed.
+    window.addEventListener("beforeunload", () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({ type: "disconnect", id: localPlayer.id })
+        );
+        socket.close();
+      }
+    });
+
+    let lastScoreboardHTML = "";
+    function updateScoreboard() {
+      let html = `<h3>Players</h3><ul>`;
+      html += `<li>${localPlayer.id} (You): ${localPlayer.score}</li>`;
+      remotePlayers.forEach((player) => {
+        html += `<li>${player.id}: ${player.score}</li>`;
+      });
+      html += `</ul>`;
+      
+      if (scoreboardRef.current && html !== lastScoreboardHTML) {
+        scoreboardRef.current.innerHTML = html;
+        lastScoreboardHTML = html;
+      }
+    }
+
+    function collisionDetection({ gamePos, boundary }) {
+      return (
+        gamePos.y - localPlayer.radius <= boundary.gamePos.y + boundary.height &&
+        gamePos.x + localPlayer.radius >= boundary.gamePos.x &&
+        gamePos.y + localPlayer.radius >= boundary.gamePos.y &&
+        gamePos.x - localPlayer.radius <= boundary.gamePos.x + boundary.width
+      );
+    }
+
+    async function loadMap() {
+      try {
+        const res = await fetch(CHUCK_URL);
+        if (!res.ok) {
+          console.error("Failed to fetch map, status:", res.status);
+          return;
+        }
+        const map = await res.json();
+        setLocalMap(map);
+
+        const rows = map.length;
+        const cols = map[0].length;
+        const gridWidth = cols * CELL_SIZE;
+        const gridHeight = rows * CELL_SIZE;
+        const offsetX = (canvas.width - gridWidth) / 2;
+        const offsetY = (canvas.height - gridHeight) / 2;
+        gridOffsetRef.current = { x: offsetX, y: offsetY };
+
+        boundaries.length = 0;
+        pellets.length = 0;
+        map.forEach((row, i) => {
+          row.forEach((symbol, j) => {
+            if (symbol === "1") {
+              boundaries.push(
+                new Boundary({ gamePos: { x: j * CELL_SIZE, y: i * CELL_SIZE } })
+              );
+            } else if (symbol === "0") {
+              pellets.push(
+                new Pellet({
+                  gamePos: {
+                    x: j * CELL_SIZE + CELL_SIZE / 2,
+                    y: i * CELL_SIZE + CELL_SIZE / 2,
+                  },
+                })
+              );
+            }
+          });
+        });
+
+        setMapLoaded(true);
+        remoteMessageQueue.forEach((msg) => processRemoteMessage(msg));
+        remoteMessageQueue = [];
+
+        // Now send the new player message using the envelope format.
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "player",
+              data: {
+                id: localPlayer.id,
+                color: localPlayer.color,
+                score: localPlayer.score,
+                position: { ...localPlayer.gamePos },
+                velocity: localPlayer.velocity,
+              },
             })
-          )
-          break
-        default:
-      }
-    })
-  })
-
-  // Checks whether the player has collided with a boundary on any side
-  function collisionDetection({ player, boundary }) {
-    return (player.position.y - player.radius + player.velocity.y <= boundary.position.y + boundary.height &&
-      player.position.x + player.radius + player.velocity.x >= boundary.position.x &&
-      player.position.y + player.radius + player.velocity.y >= boundary.position.y &&
-      player.position.x - player.radius + player.velocity.x <= boundary.position.x + boundary.width)
-  }
-
-  // Animates movement of the player and tracks updates for the player and the level
-  function animate() {
-    requestAnimationFrame(animate)
-    c.clearRect(0, 0, canvas.width, canvas.height)
-
-    // Using collision detection for continuous and smooth movement of the player
-    if (keys.w.pressed && lastKey === 'w') {
-      for (let i = 0; i < boundaries.length; i++) {
-        const boundary = boundaries[i]
-        if (collisionDetection({
-          player: {
-            ...player, velocity: {
-              x: 0,
-              y: -5
-            }
-          },
-          boundary: boundary
-        })) {
-          player.velocity.y = 0
-          break
-        } else {
-          player.velocity.y = -5
+          );
         }
-      }
-    } else if (keys.a.pressed && lastKey === 'a') {
-      for (let i = 0; i < boundaries.length; i++) {
-        const boundary = boundaries[i]
-        if (collisionDetection({
-          player: {
-            ...player, velocity: {
-              x: -5,
-              y: 0
-            }
-          },
-          boundary: boundary
-        })) {
-          player.velocity.x = 0
-          break
-        } else {
-          player.velocity.x = -5
-        }
-      }
-    } else if (keys.d.pressed && lastKey === 'd') {
-      for (let i = 0; i < boundaries.length; i++) {
-        const boundary = boundaries[i]
-        if (collisionDetection({
-          player: {
-            ...player, velocity: {
-              x: 5,
-              y: 0
-            }
-          },
-          boundary: boundary
-        })) {
-          player.velocity.x = 0
-          break
-        } else {
-          player.velocity.x = 5
-        }
-      }
-    } else if (keys.s.pressed && lastKey === 's') {
-      for (let i = 0; i < boundaries.length; i++) {
-        const boundary = boundaries[i]
-        if (collisionDetection({
-          player: {
-            ...player, velocity: {
-              x: 0,
-              y: 5
-            }
-          },
-          boundary: boundary
-        })) {
-          player.velocity.y = 0
-          break
-        } else {
-          player.velocity.y = 5
-        }
+      } catch (err) {
+        console.error("Error loading map:", err);
       }
     }
 
-    // Pellet collision
-    for (let i = pellets.length - 1; 0 < i; i--) {
-      const pellet = pellets[i]
-      pellet.draw()
+    async function reloadMap() {
+      setMapLoaded(false);
+      boundaries.length = 0;
+      pellets.length = 0;
+      await loadMap();
+      console.log("Map reloaded");
+    }
 
-      if (Math.hypot(pellet.position.x - player.position.x,
-        pellet.position.y - player.position.y) < pellet.radius + player.radius) {
-        pellets.splice(i, 1)
-        score += 10
-        scoreEl.innerHTML = score
+    function sendPlayerUpdate() {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "player",
+            data: {
+              id: localPlayer.id,
+              position: { ...localPlayer.gamePos },
+              velocity: localPlayer.velocity,
+              color: localPlayer.color,
+              score: localPlayer.score,
+            },
+          })
+        );
       }
     }
-    // Draw each boundary object as a wall
-    boundaries.forEach((boundary) => {
-      boundary.draw()
-      if (collisionDetection({ player, boundary })) {
-        //console.log('Collision')
-        player.velocity.x = 0;
-        player.velocity.y = 0;
+
+    const handleKeyDown = ({ key }) => {
+      if (keys[key]) {
+        if (!keys[key].pressed) {
+          keys[key].pressed = true;
+          sendPlayerUpdate();
+        }
       }
-    })
-    // Update the player object for movement
-    player.update()
-  }
+    };
+    const handleKeyUp = ({ key }) => {
+      if (keys[key]) {
+        keys[key].pressed = false;
+        sendPlayerUpdate();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
 
-  animate()
+    const handleResize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      reloadMap();
+    };
+    window.addEventListener("resize", handleResize);
 
-  // Check for player input
-  window.addEventListener('keydown', ({ key }) => {
-    switch (key) {
-      case 'w':
-        keys.w.pressed = true
-        lastKey = 'w'
-        break
-      case 'a':
-        keys.a.pressed = true
-        lastKey = 'a'
-        break
-      case 's':
-        keys.s.pressed = true
-        lastKey = 's'
-        break
-      case 'd':
-        keys.d.pressed = true
-        lastKey = 'd'
-        break
-      default:
+    window.reloadMap = reloadMap;
+
+    let animationFrameId;
+    let lastFrameTime = performance.now();
+    let previousGamePos = { ...localPlayer.gamePos };
+
+    function animate() {
+      animationFrameId = requestAnimationFrame(animate);
+      const now = performance.now();
+      const rawDelta = (now - lastFrameTime) / 1000;
+      const delta = Math.min(rawDelta, 0.05);
+      lastFrameTime = now;
+      c.clearRect(0, 0, canvas.width, canvas.height);
+
+      let vx = localPlayer.velocity.x;
+      let vy = localPlayer.velocity.y;
+      if (keys.w.pressed) vy = -6;
+      if (keys.s.pressed) vy = 6;
+      if (keys.a.pressed) vx = -6;
+      if (keys.d.pressed) vx = 6;
+
+      const newGamePos = {
+        x: localPlayer.gamePos.x + vx,
+        y: localPlayer.gamePos.y + vy,
+      };
+
+      let blockedX = false;
+      let blockedY = false;
+      for (const boundary of boundaries) {
+        if (
+          collisionDetection({
+            gamePos: { x: newGamePos.x, y: localPlayer.gamePos.y },
+            boundary,
+          })
+        )
+          blockedX = true;
+        if (
+          collisionDetection({
+            gamePos: { x: localPlayer.gamePos.x, y: newGamePos.y },
+            boundary,
+          })
+        )
+          blockedY = true;
+      }
+      localPlayer.velocity.x = blockedX ? 0 : vx;
+      localPlayer.velocity.y = blockedY ? 0 : vy;
+      localPlayer.gamePos.x += localPlayer.velocity.x;
+      localPlayer.gamePos.y += localPlayer.velocity.y;
+
+      const posChanged =
+        Math.abs(localPlayer.gamePos.x - previousGamePos.x) > 5 ||
+        Math.abs(localPlayer.gamePos.y - previousGamePos.y) > 5;
+      if (posChanged) {
+        sendPlayerUpdate();
+        previousGamePos = { ...localPlayer.gamePos };
+      }
+
+      for (let i = pellets.length - 1; i >= 0; i--) {
+        const pellet = pellets[i];
+        if (
+          Math.hypot(
+            pellet.gamePos.x - localPlayer.gamePos.x,
+            pellet.gamePos.y - localPlayer.gamePos.y
+          ) < pellet.radius + localPlayer.radius
+        ) {
+          pellets.splice(i, 1);
+          localPlayer.score += 10;
+          if (scoreEl) scoreEl.innerHTML = localPlayer.score;
+          updateScoreboard();
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(
+              JSON.stringify({
+                type: "pellet",
+                data: {
+                  pelletId: pellet.id,
+                  id: localPlayer.id,
+                  score: localPlayer.score,
+                },
+              })
+            );
+          }
+        }
+      }
+
+      boundaries.forEach((b) => b.draw());
+      pellets.forEach((p) => p.draw());
+      localPlayer.draw();
+
+      const currentTime = Date.now();
+      for (const [id, player] of remotePlayers) {
+        if (currentTime - player.lastUpdate > 3000) {
+          remotePlayers.delete(id);
+        }
+      }
+      remotePlayers.forEach((player) => {
+        player.update(delta);
+      });
     }
-    //console.log(player.velocity)
-  })
-  window.addEventListener('keyup', ({ key }) => {
-    switch (key) {
-      case 'w':
-        keys.w.pressed = false
-        break
-      case 'a':
-        keys.a.pressed = false
-        break
-      case 's':
-        keys.s.pressed = false
-        break
-      case 'd':
-        keys.d.pressed = false
-        break
-      default:
-    }
-    //console.log(player.velocity)
-  })
+
+    Promise.all([
+      new Promise((resolve) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          resolve();
+        } else {
+          socket.addEventListener("open", resolve);
+        }
+      }),
+      loadMap(),
+    ]).then(() => {
+      animate();
+    });
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+      delete window.reloadMap;
+    };
+  }, []);
+
+  return (
+    <div>
+      <div
+        id="scoreEl"
+        ref={scoreElRef}
+        style={{
+          color: "white",
+          fontSize: "20px",
+          padding: "10px",
+          position: "absolute",
+          top: "10px",
+          right: "10px",
+          backgroundColor: "rgba(0,0,0,0.5)",
+          borderRadius: "5px",
+        }}
+      ></div>
+      <div
+        id="scoreboard"
+        ref={scoreboardRef}
+        style={{
+          color: "white",
+          fontSize: "16px",
+          padding: "10px",
+          position: "absolute",
+          top: "10px",
+          left: "10px",
+          backgroundColor: "rgba(0,0,0,0.5)",
+          borderRadius: "5px",
+        }}
+      ></div>
+      <canvas ref={canvasRef} />
+      <button onClick={() => window.reloadMap && window.reloadMap()}>
+        Reload Map
+      </button>
+      <GlobalLeaderboard />
+    </div>
+  );
 }
 
 export default App;
