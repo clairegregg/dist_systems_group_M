@@ -126,10 +126,9 @@ func consumeMessages() {
 	select {} // Keep the goroutine running.
 }
 
-func notifyCentralServer() error {
-	centralServerURL := "http://central_server:8080/register_chunk"
+func notifyCentralServer(centralServerURL string) error {
 	payload := fmt.Sprintf(`{"chunk_id": "%s"}`, chunkID)
-	req, err := http.NewRequest("POST", centralServerURL, bytes.NewBuffer([]byte(payload)))
+	req, err := http.NewRequest("POST", centralServerURL+"/register_chunk", bytes.NewBuffer([]byte(payload)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
@@ -153,18 +152,25 @@ func main() {
 	log.Printf("Chunk ID: %s", chunkID)
 	log.Printf("Chunk topic: %s", chunkTopic)
 
+	centralServerUrl := os.Getenv("CENTRAL_SERVER_URL")
+	if centralServerUrl == "" {
+		centralServerUrl = "http://central_server:8080"
+	}
+
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
 	if kafkaBroker == "" {
 		kafkaBroker = "kafka:9092"
 	}
+	log.Printf("Kafka broker is at %s", kafkaBroker)
 
 	producer, err := kafka.NewProducer(kafkaBroker)
 	if err != nil {
 		log.Fatalf("Failed to initialize Kafka producer: %v", err)
 	}
 	kafkaProducer = producer
+	log.Print("Initialised kafka producer")
 
-	err = kafkaProducer.CreateTopic(chunkTopic)
+	err = kafkaProducer.CreateTopic(kafkaBroker, chunkTopic)
 	if err != nil {
 		log.Fatalf("Failed to create Kafka topic: %v", err)
 	}
@@ -176,7 +182,7 @@ func main() {
 	}
 	kafkaConsumer = consumer
 
-	if err := notifyCentralServer(); err != nil {
+	if err := notifyCentralServer(centralServerUrl); err != nil {
 		log.Fatalf("Registration failed: %v", err)
 	}
 
