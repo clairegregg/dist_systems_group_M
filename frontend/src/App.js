@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import GlobalLeaderboard from "./GlobalLeaderboard";
+import map from "./maps"
 
 
 function App() {
@@ -13,15 +14,20 @@ function App() {
   // Use sessionStorage so that the player ID persists across refreshes but clears when the tab is closed.
   const storedPlayer = sessionStorage.getItem("localPlayer");
   const initialPlayer = storedPlayer ? JSON.parse(storedPlayer) : null;
+  const maps = []
+  for (let item in map){
+    maps.push(map[item])
+  }
+  console.log(maps)
   // If an ID already exists, use it; otherwise, generate a new one.
   const localPlayerIdRef = useRef(
     initialPlayer?.id ||
-      Date.now().toString() + Math.random().toString(36).substring(2)
+    Date.now().toString() + Math.random().toString(36).substring(2)
   );
   
   // gridOffsetRef translates game world coordinates into screen coordinates.
   const gridOffsetRef = useRef({ x: 0, y: 0 });
-
+  
   // State for map and loaded flag.
   const [localMap, setLocalMap] = useState([]);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -29,16 +35,18 @@ function App() {
   useEffect(() => {
     mapLoadedRef.current = mapLoaded;
   }, [mapLoaded]);
-
+  
   // Persist local player data in sessionStorage.
   function saveLocalPlayer(player) {
     sessionStorage.setItem("localPlayer", JSON.stringify(player));
   }
-
+  
   useEffect(() => {
     // Do NOT clear sessionStorage on beforeunload; this allows the ID to persist through refresh.
     // Only the WebSocket connection will be closed on unload.
     
+    let mapX = 1
+    let mapY = 1
     const canvas = canvasRef.current;
     const scoreEl = scoreElRef.current;
     const scoreboardEl = scoreboardRef.current;
@@ -265,16 +273,15 @@ function App() {
 
     async function loadMap() {
       try {
-        const res = await fetch(CHUCK_URL);
-        if (!res.ok) {
-          console.error("Failed to fetch map, status:", res.status);
-          return;
-        }
-        const map = await res.json();
-        setLocalMap(map);
-
-        const rows = map.length;
-        const cols = map[0].length;
+        // const res = await fetch(CHUCK_URL);
+        // if (!res.ok) {
+        //   console.error("Failed to fetch map, status:", res.status);
+        //   return;
+        // }
+        // const map = await res.json();
+        setLocalMap(maps[mapX*4+mapY]);
+        const rows = maps[0].length;
+        const cols = maps[0][0].length;
         const gridWidth = cols * CELL_SIZE;
         const gridHeight = rows * CELL_SIZE;
         const offsetX = (canvas.width - gridWidth) / 2;
@@ -283,7 +290,7 @@ function App() {
 
         boundaries.length = 0;
         pellets.length = 0;
-        map.forEach((row, i) => {
+        maps[mapX*4+mapY].forEach((row, i) => {
           row.forEach((symbol, j) => {
             if (symbol === "1") {
               boundaries.push(
@@ -332,6 +339,15 @@ function App() {
       pellets.length = 0;
       await loadMap();
       console.log("Map reloaded");
+    }
+
+    async function swapMap(newX,newY) {
+      boundaries.length = 0;
+      pellets.length = 0;
+      mapX = newX;
+      mapY = newY;
+      await loadMap();
+      console.log("Swapped Map")
     }
 
     function sendPlayerUpdate() {
@@ -383,6 +399,22 @@ function App() {
 
     function animate() {
       animationFrameId = requestAnimationFrame(animate);
+      if (localPlayer.gamePos.x < 0){
+        localPlayer.gamePos.x = 650
+        swapMap(mapX+1,mapY)
+      }
+      else if (localPlayer.gamePos.x > 650){
+        localPlayer.gamePos.x = 0
+        swapMap(mapX-1,mapY)
+      }
+      else if(localPlayer.gamePos.y < 0 ){
+        localPlayer.gamePos.y = 650
+        swapMap(mapX,mapY+1)
+      }
+      else if(localPlayer.gamePos.y > 650 ){
+        localPlayer.gamePos.y = 0
+        swapMap(mapX,mapY-1)
+      }
       const now = performance.now();
       const rawDelta = (now - lastFrameTime) / 1000;
       const delta = Math.min(rawDelta, 0.05);
@@ -395,6 +427,8 @@ function App() {
       if (keys.s.pressed) vy = 6;
       if (keys.a.pressed) vx = -6;
       if (keys.d.pressed) vx = 6;
+
+      console.log(localPlayer.gamePos)
 
       const newGamePos = {
         x: localPlayer.gamePos.x + vx,
