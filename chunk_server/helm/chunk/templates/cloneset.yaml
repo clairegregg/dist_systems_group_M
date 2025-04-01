@@ -1,0 +1,26 @@
+apiVersion: apps.kruise.io/v1alpha1
+kind: CloneSet
+metadata:
+  labels:
+    app: pacman-chunk
+  name: pacman-chunk
+spec:
+  replicas: {{ .Values.pacmanChunk.replicas }}
+  selector:
+    matchLabels:
+      app: pacman-chunk
+  template:
+    metadata:
+      labels:
+        app: pacman-chunk
+    spec:
+      containers:
+        - name: pacman-chunk
+          image: {{ .Values.pacmanChunk.image }}
+          ports:
+            - containerPort: {{ .Values.pacmanChunk.port }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVER
+              value: {{ .Values.pacmanChunk.kafka }}
+            - name: CENTRAL_SERVER_URL
+              value: {{ .Values.pacmanChunk.centralServer }}

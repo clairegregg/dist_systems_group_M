@@ -2,9 +2,11 @@
 
 # Load environment variables from .env file
 if [ -f .env ]; then
-  export $(cat .env | grep -v '#' | awk '/=/ {print $1}')
+  set -o allexport
+  source .env
+  set +o allexport
 else
-  echo ".env file not found. Please create one with your DOCKER_USERNAME set."
+  echo ".env file not found."
   exit 1
 fi
 # Check if DOCKER_USERNAME is set
@@ -20,10 +22,13 @@ for ((i=1; i<=$NUM_CLUSTERS; i++)); do
   kind create cluster --name chunk$i
 
   # Using your docker username
-  envsubst < chunk_server/k8s/pacman-chunk.yaml | kubectl apply -f -
-  sleep 5s
-  kubectl wait --for=condition=ready pod -l app=pacman-chunk --timeout=300s
+  # sed 's/clairegregg/${DOCKER_USERNAME}/g' chunk_server/k8s/pacman-chunk.yaml | envsubst | kubectl apply -f -
+  # sed -e "s/{i}/${i}/g" chunk_server/k8s/caddy.yaml | kubectl apply -f -
+  # sleep 5s
+  # kubectl wait --for=condition=ready pod -l app=pacman-chunk --timeout=300s
+  # kubectl wait --for=condition=ready pod -l app=caddy --timeout=300s
 
-  # Port forward the web application
-  nohup kubectl port-forward --address 0.0.0.0 svc/pacman-chunk 808$i:80 > chunk-server-${i}-port.log 2>&1 &
+  # # Port forward the web application
+  # nohup kubectl port-forward --address 0.0.0.0 svc/caddy 808$i:80 > caddy-${i}-port.log 2>&1 &
+  # nohup kubectl port-forward --address 0.0.0.0 svc/caddy 443$i:443 > caddy-${i}-https-port.log 2>&1 &
 done

@@ -1,0 +1,30 @@
+replicaCount: 1
+
+caddy:
+  image: caddy:latest
+  replicas: 1
+  ports:
+    http: 80
+    https: 443
+
+pacmanChunk:
+  image: clairegregg/pacman-chunk:latest
+  replicas: 3
+  port: 8080
+  kafka: "kafka.clairegregg.com:6442"
+  centralServer: "http://server.clairegregg.com:6441"
+
+service:
+  type: ClusterIP
+
+config:
+  caddyfile: |
+    {
+      auto_https off 
+    }
+    :80 {
+      reverse_proxy pacman-chunk-{query.id}.pacman-chunk:8080 
+    }
+    :443 {
+      reverse_proxy pacman-chunk-{query.id}.pacman-chunk:8080 
+    }

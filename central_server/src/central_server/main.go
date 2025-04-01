@@ -7,23 +7,30 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
+	"github.com/Cormuckle/dist_systems_group_M/central_server/k8s"
 	"github.com/Cormuckle/dist_systems_group_M/central_server/kafka"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
-	client        *mongo.Client
-	mongoURI      = os.Getenv("MONGO_URI")
-	db            = make(map[string]string)
-	kafkaProducer *kafka.Producer
-	kafkaConsumer *kafka.Consumer
-	broadcastTopic = "central_to_chunk_broadcast"
-	chunkToCentral = "chunk_to_central"
-	chunkServers   []string // Stores registered chunk server IDs
+	client          *mongo.Client
+	mongoURI        = os.Getenv("MONGO_URI")
+	kubeconfigPaths = os.Getenv("KUBECONFIGS")
+	kubeconfigs     []string
+	db              = make(map[string]string)
+	kafkaProducer   *kafka.Producer
+	kafkaConsumer   *kafka.Consumer
+	broadcastTopic  = "central_to_chunk_broadcast"
+	chunkToCentral  = "chunk_to_central"
+	chunkServers    []string // Stores registered chunk server IDs
+	clusterClients  []*k8s.ClusterClient
 )
 
 // connectToDB initializes a MongoDB connection.
@@ -42,10 +49,73 @@ func connectToDB(ctx context.Context) (*mongo.Client, error) {
 	return client, nil
 }
 
+// MongoDB Data Types
+type Chunk struct {
+	X   int    `bson:"x"`
+	Y   int    `bson:"y"`
+	Url string `bson:"url"`
+}
+
+// Request/Response models
+type CreateUserRequest struct {
+	UserName   string `json:"userName" binding:"required"`
+	PacmanBody string `json:"pacmanBody"`
+}
+
+type CreateUserResponse struct {
+	UserName           string `json:"userName"`
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	SpawnCoordinates   struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	} `json:"spawnCoordinates"`
+}
+
+type GetRandomChunkServerRequest struct {
+	UserName string `json:"userName" binding:"required"`
+}
+
+type GetRandomChunkServerResponse struct {
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	TileCoordinates    struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	} `json:"tileCoordinates"`
+}
+
+type NewChunkServerRequest struct {
+	ChunkCoordinates struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	} `json:"chunkCoordinates"`
+}
+
+type NewChunkServerResponse struct {
+	ChunkServerAddress string `json:"chunkServerAddress"`
+}
+
+type DeleteChunkServerRequest struct {
+	ChunkServerAddress string `json:"chunkServerAddress"`
+	ChunkCoordinates   struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	} `json:"chunkCoordinates"`
+}
+
+type UpdateScoreRequest struct {
+	UserName string `json:"userName" binding:"required"`
+	Score    int    `json:"score" binding:"required"`
+}
+
+type LeaderboardEntry struct {
+	UserName string `json:"userName"`
+	Score    int    `json:"score"`
+}
+
 // setupRouter initializes HTTP routes.
 func setupRouter() *gin.Engine {
 	r := gin.Default()
-    
+
 	r.GET("/dbconn", func(c *gin.Context) {
 		// Ping the database
 		err := client.Ping(context.Background(), nil)
@@ -69,7 +139,7 @@ func setupRouter() *gin.Engine {
 			c.JSON(http.StatusOK, gin.H{"user": user, "status": "no value"})
 		}
 	})
-    
+
 	// Authorized group (uses gin.BasicAuth() middleware)
 	// Same than:
 	// authorized := r.Group("/")
@@ -96,14 +166,160 @@ func setupRouter() *gin.Engine {
 		}
 	})
 
+	// ------------------------------- API Endpoints for the Central Server
+
+	// create new user
+	r.POST("/users", func(c *gin.Context) {
+		var req CreateUserRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Check if username exists in the in-memory map as a simple cache/duplicate check
+		if _, exists := db[req.UserName]; exists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "username in use"})
+			return
+		}
+
+		userDoc := gin.H{
+			"userName":   req.UserName,
+			"pacmanBody": req.PacmanBody,
+			"createdAt":  time.Now(),
+			"score":      0,
+		}
+
+		// Insert the document into the "users" collection
+		collection := client.Database("game").Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := collection.InsertOne(ctx, userDoc)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to insert user into database"})
+			return
+		}
+
+		db[req.UserName] = req.PacmanBody
+
+		// Build the response object
+		resp := CreateUserResponse{
+			UserName:           req.UserName,
+			ChunkServerAddress: "http://chunkserver.example.com", // Placeholder address
+		}
+		resp.SpawnCoordinates.X = 100.0
+		resp.SpawnCoordinates.Y = 200.0
+
+		c.JSON(http.StatusCreated, resp)
+	})
+
+	// PUT endpoint to update a user's score
+	r.PUT("/scores", func(c *gin.Context) {
+		var req UpdateScoreRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		collection := client.Database("game").Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		filter := bson.M{"userName": req.UserName}
+		update := bson.M{"$max": bson.M{"highScore": req.Score}}
+
+		result, err := collection.UpdateOne(ctx, filter, update)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update score"})
+			return
+		}
+		if result.MatchedCount == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "User not found"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "score updated"})
+	})
+
+	// GET endpoint to retrieve the top 10 leaderboard entries
+	r.GET("/leaderboard", func(c *gin.Context) {
+		collection := client.Database("game").Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Set up find options to sort by highScore descending and limit to 10 results.
+		opts := options.Find().SetSort(bson.D{{Key: "highScore", Value: -1}}).SetLimit(10)
+		cursor, err := collection.Find(ctx, bson.M{}, opts)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error retrieving leaderboard"})
+			return
+		}
+		defer cursor.Close(ctx)
+
+		var leaderboard []LeaderboardEntry
+		for cursor.Next(ctx) {
+			var userDoc struct {
+				UserName  string `bson:"userName"`
+				HighScore int    `bson:"highScore"`
+			}
+			if err := cursor.Decode(&userDoc); err != nil {
+				continue
+			}
+			leaderboard = append(leaderboard, LeaderboardEntry{
+				UserName: userDoc.UserName,
+				Score:    userDoc.HighScore,
+			})
+		}
+		c.JSON(http.StatusOK, leaderboard)
+	})
+
+	// GET endpoint to find a chunk server at specific chunk coordinates
+	// May require bringing up a new chunk server
+	r.GET("/get-chunk-server", func(c *gin.Context) {
+		var req NewChunkServerRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		url, err := getChunk(c, req.ChunkCoordinates.X, req.ChunkCoordinates.Y)
+		if err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error, failed to find chunk server %v, %v: %w", req.ChunkCoordinates.X, req.ChunkCoordinates.Y, err).Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, NewChunkServerResponse{
+			ChunkServerAddress: url,
+		})
+	})
+
+	// Temporary DELETE request to bring down a chunk server.
+	// Should be replaced with communication from Kafka when a chunk should be brought down.
+	r.DELETE("/delete-chunk-server", func(c *gin.Context) {
+		var req DeleteChunkServerRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		err := deleteChunk(c, req.ChunkCoordinates.X, req.ChunkCoordinates.Y, req.ChunkServerAddress)
+		if err != nil {
+			fmt.Print(err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("error, failed to delete chunk server %v, %v: %w", req.ChunkCoordinates.X, req.ChunkCoordinates.Y, err).Error()})
+			return
+		}
+	})
+
 	// Send a broadcast message to all chunk servers
 	// This is just for tesing purpose but we can use this function iternally to communicate
-	/* 
-	
-	curl -X POST http://<central_server_host>:8080/broadcast \
-     -H "Content-Type: application/json" \
-     -d '{"message": "Your broadcast message"}'
-	
+	/*
+
+			curl -X POST http://<central_server_host>:8080/broadcast \
+		     -H "Content-Type: application/json" \
+		     -d '{"message": "Your broadcast message"}'
+
 	*/
 	r.POST("/broadcast", func(c *gin.Context) {
 		var req struct {
@@ -125,11 +341,11 @@ func setupRouter() *gin.Engine {
 	})
 
 	// Send a message to a specific chunk server
-	/* 
-	curl -X POST http://<central_server_host>:8080/send/<chunk_id> \
-     -H "Content-Type: application/json" \
-     -d '{"message": "Your message"}'
-	
+	/*
+			curl -X POST http://<central_server_host>:8080/send/<chunk_id> \
+		     -H "Content-Type: application/json" \
+		     -d '{"message": "Your message"}'
+
 	*/
 	r.POST("/send/:chunk_id", func(c *gin.Context) {
 		chunkID := c.Param("chunk_id")
@@ -154,11 +370,11 @@ func setupRouter() *gin.Engine {
 	})
 
 	// Register a new chunk server
-	/* 
-	curl -X POST http://<central_server_host>:8080/register_chunk \
-     -H "Content-Type: application/json" \
-     -d '{"chunk_id": "chunk_server_123"}'
-	
+	/*
+			curl -X POST http://<central_server_host>:8080/register_chunk \
+		     -H "Content-Type: application/json" \
+		     -d '{"chunk_id": "chunk_server_123"}'
+
 	*/
 	r.POST("/register_chunk", func(c *gin.Context) {
 		var req struct {
@@ -184,10 +400,10 @@ func setupRouter() *gin.Engine {
 
 		c.JSON(http.StatusOK, gin.H{"status": "Chunk registered"})
 	})
- 
+
 	// List all registered chunk servers
 	/*
-	curl -X GET http://<central_server_host>:8080/list_chunks
+		curl -X GET http://<central_server_host>:8080/list_chunks
 	*/
 	r.GET("/list_chunks", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"chunk_servers": chunkServers})
@@ -208,6 +424,139 @@ func consumeChunkMessages(ctx context.Context) {
 	}
 }
 
+func deleteChunk(ctx context.Context, x, y int, url string) error {
+	collection := client.Database("game").Collection("chunks")
+	ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// Check if the chunk server actually exists
+	cursor, err := collection.Find(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}, {Key: "url", Value: url}})
+	if err != nil {
+		return err
+	}
+	var results []Chunk
+	if err = cursor.All(ctxC, &results); err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		return fmt.Errorf("a chunk server does not exist with coordinates (%v,%v) and url %v, so it cannot be deleted.", x, y, url)
+	}
+
+	// Delete the chunk server from records
+	_, err = collection.DeleteOne(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}, {Key: "url", Value: url}})
+	if err != nil {
+		return err
+	}
+
+	// Turn the chunk server down
+	return k8s.DeleteChunkServer(ctx, clusterClients, x, y, url)
+}
+
+func getChunk(ctx context.Context, x, y int) (string, error) {
+	collection := client.Database("game").Collection("chunks")
+	ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	cursor, err := collection.Find(ctxC, bson.D{{Key: "x", Value: x}, {Key: "y", Value: y}})
+	if err != nil {
+		return "", err
+	}
+	var results []Chunk
+	if err = cursor.All(ctxC, &results); err != nil {
+		return "", err
+	}
+	defer cursor.Close(ctx)
+	log.Printf("Chunk results from DB are %v", results)
+
+	if len(results) == 0 {
+		if len(clusterClients) == 0 {
+			log.Printf("No clusterclients currently - kubeconfigs are %v", kubeconfigs)
+			clusterClients, err = k8s.KubeClients(kubeconfigs)
+			if err != nil {
+				return "", err
+			}
+		}
+		url, err := k8s.NewChunkServer(ctx, clusterClients)
+		if err != nil {
+			return "", err
+		}
+		err = addChunkToDB(ctx, x, y, url)
+		if err != nil {
+			return "", err
+		}
+		return url, nil
+	}
+	chunk := results[0]
+	return chunk.Url, nil
+}
+
+func addChunkToDB(ctx context.Context, x, y int, url string) error {
+	collection := client.Database("game").Collection("chunks")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// Add chunk to DB
+	chunk := Chunk{
+		X:   x,
+		Y:   y,
+		Url: url,
+	}
+	log.Printf("Writing this chunk to DB: %v", chunk)
+	_, err := collection.InsertOne(ctx, chunk)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func clearChunkServers(ctx context.Context) error {
+	collection := client.Database("game").Collection("chunks")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := collection.DeleteMany(ctx, bson.D{})
+	return err
+}
+
+func initialChunkServers(ctx context.Context) error {
+	err := clearChunkServers(ctx)
+	if err != nil {
+		return err
+	}
+
+	urls, err := k8s.GetCurrentChunkServerUrls(ctx, clusterClients)
+	if err != nil {
+		return err
+	}
+
+	n := 1
+	i := 0
+	var coords [][2]int
+	for i < len(urls) {
+		for m := 1; m <= n; m++ {
+			if m == n {
+				coords = append(coords, [][2]int{
+					{m, m}, {-m, m}, {m, -m}, {-m, -m},
+				}...)
+				i += 4
+			} else {
+				coords = append(coords, [][2]int{
+					{n, m}, {-n, m}, {n, -m}, {-n, -m},
+					{m, n}, {-m, n}, {m, -n}, {-m, -n},
+				}...)
+				i += 8
+			}
+		}
+		n++
+	}
+
+	for i, url := range urls {
+		err := addChunkToDB(ctx, coords[i][0], coords[i][1], url)
+		if err != nil {
+			fmt.Printf("Failed to write chunk %s to DB: %v", url, err)
+		}
+	}
+	return nil
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -219,6 +568,16 @@ func main() {
 		log.Fatalf("Error connecting to MongoDB: %v", err)
 	}
 	defer client.Disconnect(ctx)
+
+	// Create k8s clients for chunk clusters
+	kubeconfigs = strings.Split(kubeconfigPaths, ",")
+	clusterClients, err = k8s.KubeClients(kubeconfigs)
+	if err != nil {
+		log.Fatalf("Error connecting to cluster clients: %v", err)
+	}
+
+	// Initialise chunk servers with coordinates
+	initialChunkServers(ctx)
 
 	// Kafka setup
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")

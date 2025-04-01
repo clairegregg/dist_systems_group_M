@@ -12,6 +12,10 @@ spec:
       labels:
         app: pacman-central
     spec:
+      volumes:
+        - name: kubeconfig-volume
+          configMap:
+            name: kubeconfig-files
       containers:
         - name: pacman-central
           image: clairegregg/pacman-central:latest
@@ -20,6 +24,80 @@ spec:
           env:
             - name: MONGO_URI
               value: "mongodb://admin:password@mongodb:27017"
+            - name: KUBECONFIGS
+              value: "/etc/kubeconfigs/config1.yaml,/etc/kubeconfigs/config2.yaml,/etc/kubeconfigs/config3.yaml"
+            - name: KAFKA_BOOTSTRAP_SERVER
+              value: "kafka.clairegregg.com:6442"
+          volumeMounts:
+            - name: kubeconfig-volume
+              mountPath: "/etc/kubeconfigs"
+              readOnly: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubeconfig-files
+data:
+  config1.yaml: |
+    apiVersion: v1
+    clusters:
+    - cluster:
+        certificate-authority-data: ${CHUNK1_CERT_AUTH}
+        server: ${CHUNK1_SERVER}
+      name: kind-chunk1
+    contexts:
+    - context:
+        cluster: kind-chunk1
+        user: kind-chunk1
+      name: kind-chunk1
+    current-context: kind-chunk1
+    kind: Config
+    preferences: {}
+    users:
+    - name: kind-chunk1
+      user:
+        client-certificate-data: ${CHUNK1_CERT_DATA}
+        client-key-data: ${CHUNK1_KEY_DATA}
+  config2.yaml: |
+    apiVersion: v1
+    clusters:
+    - cluster:
+        certificate-authority-data: ${CHUNK2_CERT_AUTH}
+        server: ${CHUNK2_SERVER}
+      name: kind-chunk2
+    contexts:
+    - context:
+        cluster: kind-chunk2
+        user: kind-chunk2
+      name: kind-chunk2
+    current-context: kind-chunk2
+    kind: Config
+    preferences: {}
+    users:
+    - name: kind-chunk2
+      user:
+        client-certificate-data: ${CHUNK2_CERT_DATA}
+        client-key-data: ${CHUNK2_KEY_DATA}
+  config3.yaml: |
+    apiVersion: v1
+    clusters:
+    - cluster:
+        certificate-authority-data: ${CHUNK3_CERT_AUTH}
+        server: ${CHUNK3_SERVER}
+      name: kind-chunk3
+    contexts:
+    - context:
+        cluster: kind-chunk3
+        user: kind-chunk3
+      name: kind-chunk3
+    current-context: kind-chunk3
+    kind: Config
+    preferences: {}
+    users:
+    - name: kind-chunk3
+      user:
+        client-certificate-data: ${CHUNK3_CERT_DATA}
+        client-key-data: ${CHUNK3_KEY_DATA}
 ---
 apiVersion: v1
 kind: Service
