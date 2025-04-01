@@ -34,7 +34,7 @@ jobs:
               with:
                 host: ${{ vars.SERVER_HOST }}
                 username: ${{ vars.SERVER_USERNAME }}
-                key: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+                password: ${{ secrets.SERVER_SSH_PASSWORD }}
                 port: 22
                 script: |
                     docker ps -q --filter "name=frontend" | grep -q . && docker stop frontend && docker rm frontend || echo "No running container"
