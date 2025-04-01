@@ -22,11 +22,14 @@ jobs:
             - name: Build and push Docker images
               uses: docker/build-push-action@v6
               with: 
+                push: true
+
                 tags: ${{ vars.DOCKERHUB_USERNAME }}/pacman-frontend:latest
                 context: frontend
     
     deploy:
         runs-on: ubuntu-latest
+        needs: build
 
         steps: 
             - name: Deploy via ssh
@@ -34,7 +37,7 @@ jobs:
               with:
                 host: ${{ vars.SERVER_HOST }}
                 username: ${{ vars.SERVER_USERNAME }}
-                key: ${{ secrets.KEY }}
+                password: ${{ secrets.SERVER_SSH_PASSWORD }}
                 port: 22
                 script: |
                     docker ps -q --filter "name=frontend" | grep -q . && docker stop frontend && docker rm frontend || echo "No running container"
