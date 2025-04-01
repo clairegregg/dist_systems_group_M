@@ -41,11 +41,11 @@ func (p *Producer) SendMessage(topic, value string) error {
 }
 
 // CreateTopic creates a Kafka topic if it does not exist
-func (p *Producer) CreateTopic(topic string) error {
+func (p *Producer) CreateTopic(bootstrapServer, topic string) error {
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_1_0_0
 
-	admin, err := sarama.NewClusterAdmin([]string{"kafka:9092"}, config)
+	admin, err := sarama.NewClusterAdmin([]string{bootstrapServer}, config)
 	if err != nil {
 		return fmt.Errorf("error creating cluster admin: %v", err)
 	}

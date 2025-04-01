@@ -157,14 +157,16 @@ func main() {
 	if kafkaBroker == "" {
 		kafkaBroker = "kafka:9092"
 	}
+	log.Printf("Kafka broker is at %s", kafkaBroker)
 
 	producer, err := kafka.NewProducer(kafkaBroker)
 	if err != nil {
 		log.Fatalf("Failed to initialize Kafka producer: %v", err)
 	}
 	kafkaProducer = producer
+	log.Print("Initialised kafka producer")
 
-	err = kafkaProducer.CreateTopic(chunkTopic)
+	err = kafkaProducer.CreateTopic(kafkaBroker, chunkTopic)
 	if err != nil {
 		log.Fatalf("Failed to create Kafka topic: %v", err)
 	}
