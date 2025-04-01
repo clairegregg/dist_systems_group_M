@@ -12,6 +12,7 @@ pacmanChunk:
   replicas: 3
   port: 8080
   kafka: "kafka.clairegregg.com:6442"
+  centralServer: "server.clairegregg.com:6441"
 
 service:
   type: ClusterIP

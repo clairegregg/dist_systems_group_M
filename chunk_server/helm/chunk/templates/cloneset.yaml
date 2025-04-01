@@ -22,3 +22,5 @@ spec:
           env:
             - name: KAFKA_BOOTSTRAP_SERVER
               value: {{ .Values.pacmanChunk.kafka }}
+            - name: CENTRAL_SERVER_URL
+              value: {{ .Values.pacmanChunk.centralServer }}

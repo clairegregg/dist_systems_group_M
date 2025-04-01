@@ -126,8 +126,7 @@ func consumeMessages() {
 	select {} // Keep the goroutine running.
 }
 
-func notifyCentralServer() error {
-	centralServerURL := "http://central_server:8080/register_chunk"
+func notifyCentralServer(centralServerURL string) error {
 	payload := fmt.Sprintf(`{"chunk_id": "%s"}`, chunkID)
 	req, err := http.NewRequest("POST", centralServerURL, bytes.NewBuffer([]byte(payload)))
 	if err != nil {
@@ -152,6 +151,11 @@ func main() {
 	chunkTopic = fmt.Sprintf("central_to_chunk_%s", chunkID)
 	log.Printf("Chunk ID: %s", chunkID)
 	log.Printf("Chunk topic: %s", chunkTopic)
+
+	centralServerUrl := os.Getenv("CENTRAL_SERVER_URL")
+	if centralServerUrl == "" {
+		centralServerUrl = "http://central_server:8080/register_chunk"
+	}
 
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
 	if kafkaBroker == "" {
@@ -178,7 +182,7 @@ func main() {
 	}
 	kafkaConsumer = consumer
 
-	if err := notifyCentralServer(); err != nil {
+	if err := notifyCentralServer(centralServerUrl); err != nil {
 		log.Fatalf("Registration failed: %v", err)
 	}
 
