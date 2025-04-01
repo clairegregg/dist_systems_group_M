@@ -128,7 +128,7 @@ func consumeMessages() {
 
 func notifyCentralServer(centralServerURL string) error {
 	payload := fmt.Sprintf(`{"chunk_id": "%s"}`, chunkID)
-	req, err := http.NewRequest("POST", centralServerURL, bytes.NewBuffer([]byte(payload)))
+	req, err := http.NewRequest("POST", centralServerURL+"/register_chunk", bytes.NewBuffer([]byte(payload)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
@@ -154,7 +154,7 @@ func main() {
 
 	centralServerUrl := os.Getenv("CENTRAL_SERVER_URL")
 	if centralServerUrl == "" {
-		centralServerUrl = "http://central_server:8080/register_chunk"
+		centralServerUrl = "http://central_server:8080"
 	}
 
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
