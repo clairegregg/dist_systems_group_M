@@ -32,22 +32,22 @@ jobs:
 
       # Logs in with your Azure credentials
       - name: Azure login
-        uses: azure/login@v1.4.6
+        uses: azure/login@v2.2.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          # subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          allow-no-subscriptions: true
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # allow-no-subscriptions: true
 
       # Use kubelogin to configure your kubeconfig for Azure auth
       - name: Set up kubelogin for non-interactive login
-        uses: azure/use-kubelogin@v1
+        uses: azure/use-kubelogin@v1.2
         with:
           kubelogin-version: 'v0.0.25'
 
       # Retrieves your Azure Kubernetes Service cluster's kubeconfig file
       - name: Get K8s context
-        uses: azure/aks-set-context@v3
+        uses: azure/aks-set-context@v4.0.2
         with:
           resource-group: ${{ env.RESOURCE_GROUP }}
           cluster-name: ${{ env.CLUSTER_NAME }}
@@ -56,7 +56,7 @@ jobs:
 
       # Runs Helm to create manifest files
       - name: Bake deployment
-        uses: azure/k8s-bake@v2
+        uses: azure/k8s-bake@v3.0.1
         with:
           renderEngine: "helm"
           helmChart: ${{ env.CHART_PATH }}
@@ -66,7 +66,7 @@ jobs:
 
       # Deploys application based on manifest files from previous step
       - name: Deploy application
-        uses: Azure/k8s-deploy@v4
+        uses: Azure/k8s-deploy@v5.0.1
         with:
           action: deploy
           manifests: ${{ steps.bake.outputs.manifestsBundle }}
