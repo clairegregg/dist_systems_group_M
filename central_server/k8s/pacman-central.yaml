@@ -25,7 +25,7 @@ spec:
             - name: MONGO_URI
               value: "mongodb://admin:password@mongodb:27017"
             - name: KUBECONFIGS
-              value: "/etc/kubeconfigs/config1.yaml,/etc/kubeconfigs/config2.yaml,/etc/kubeconfigs/config3.yaml"
+              value: "/etc/kubeconfigs/config1.yaml,/etc/kubeconfigs/config2.yaml,/etc/kubeconfigs/config3.yaml,/etc/kubeconfigs/config4.yaml"
             - name: KAFKA_BOOTSTRAP_SERVER
               value: "kafka.clairegregg.com:6442"
           volumeMounts:
@@ -98,6 +98,26 @@ data:
       user:
         client-certificate-data: ${CHUNK3_CERT_DATA}
         client-key-data: ${CHUNK3_KEY_DATA}
+  config4.yaml: |
+    apiVersion: v1
+    clusters:
+    - cluster:
+        certificate-authority-data: ${CHUNK4_CERT_AUTH}
+        server: ${CHUNK4_SERVER}
+      name: chunk4
+    contexts:
+    - context:
+        cluster: chunk4
+        user: clusterUser_pacman_chunk4
+      name: chunk4
+    current-context: chunk4
+    kind: Config
+    preferences: {}
+    users:
+    - name: clusterUser_pacman_chunk4
+      user:
+        client-certificate-data: ${CHUNK4_CERT_DATA}
+        client-key-data: ${CHUNK4_KEY_DATA}
 ---
 apiVersion: v1
 kind: Service
