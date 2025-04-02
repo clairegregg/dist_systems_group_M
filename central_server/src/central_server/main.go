@@ -575,9 +575,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error connecting to cluster clients: %v", err)
 	}
+	log.Println("Created clients for all clusters")
 
 	// Initialise chunk servers with coordinates
 	initialChunkServers(ctx)
+	log.Println("Initialised chunk servers")
 
 	// Kafka setup
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
@@ -599,6 +601,8 @@ func main() {
 
 	// Start consuming messages from chunk servers
 	go consumeChunkMessages(ctx)
+
+	log.Println("Kafka setup")
 
 	// Graceful shutdown handling
 	go func() {
