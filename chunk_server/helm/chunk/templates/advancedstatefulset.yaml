@@ -15,6 +15,13 @@ spec:
     spec:
       containers:
         - name: pacman-chunk
-          image: clairegregg/pacman-chunk:latest
+           image: {{ .Values.pacmanChunk.image }}
           ports:
-            - containerPort: 8080
+            - containerPort: {{ .Values.pacmanChunk.port }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVER
+              value: {{ .Values.pacmanChunk.kafka }}
+            - name: CENTRAL_SERVER_URL
+              value: {{ .Values.pacmanChunk.centralServer }}
+            - name: CLUSTER_NUMBER
+              value: {{ .Values.pacmanChunk.clusterNumber }}

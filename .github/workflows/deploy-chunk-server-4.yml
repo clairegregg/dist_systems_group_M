@@ -18,6 +18,7 @@ env:
   RESOURCE_GROUP: "pacman"
   CLUSTER_NAME: "chunk4"
   CHART_PATH: "chunk_server/helm/chunk"
+  CLUSTER_NUMBER: "4"
 
 jobs:
   deploy:
@@ -60,7 +61,8 @@ jobs:
         with:
           renderEngine: "helm"
           helmChart: ${{ env.CHART_PATH }}
-          #overrideFiles: ${{ env.CHART_OVERRIDE_PATH }}
+          overrides: |
+            pacman.clusterNumber:4
           helm-version: "latest"
         id: bake
 
