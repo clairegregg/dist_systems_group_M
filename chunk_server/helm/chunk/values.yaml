@@ -23,8 +23,8 @@ config:
       auto_https off 
     }
     :80 {
-      reverse_proxy pacman-chunk-{query.id}:8080 
+      reverse_proxy pacman-chunk-{query.id}.pacman-chunk:8080 
     }
     :443 {
-      reverse_proxy pacman-chunk-{query.id}:8080 
+      reverse_proxy pacman-chunk-{query.id}.pacman-chunk:8080 
     }
