@@ -18,7 +18,6 @@ function App() {
   for (let item in map){
     maps.push(map[item])
   }
-  console.log(maps)
   // If an ID already exists, use it; otherwise, generate a new one.
   const localPlayerIdRef = useRef(
     initialPlayer?.id ||
@@ -75,7 +74,7 @@ function App() {
     }
 
     class Player {
-      constructor({ id, gamePos, velocity, color, isLocal, score = 0 }) {
+      constructor({ id, gamePos, velocity, color, isLocal, score = 0,X,Y }) {
         this.id = id;
         this.gamePos = { ...gamePos };
         this.velocity = velocity;
@@ -85,6 +84,8 @@ function App() {
         this.score = score;
         this.targetGamePos = { ...gamePos };
         this.lastUpdate = Date.now();
+        this.X = X;
+        this.Y = Y;
       }
       update(delta) {
         if (!this.isLocal) {
@@ -99,7 +100,10 @@ function App() {
             this.gamePos.y += dy * delta * smoothingFactor;
           }
         }
-        this.draw();
+        console.log(`Player: ${this.id}, X:${this.X}, Y:${this.Y}`)
+        if(this.X === mapX && this.Y === mapY){
+          this.draw();
+        }
       }
       draw() {
         const screenX = gridOffsetRef.current.x + this.gamePos.x;
@@ -146,11 +150,15 @@ function App() {
       color: localPlayerColor,
       isLocal: true,
       score: initialPlayer?.score || 0,
+      X:initialPlayer?.X || mapX,
+      Y:initialPlayer?.Y || mapY
     });
     saveLocalPlayer({
       id: localPlayer.id,
       color: localPlayer.color,
       score: localPlayer.score,
+      X:mapX,
+      Y:mapY
     });
 
     const keys = {
@@ -179,6 +187,7 @@ function App() {
               return;
             }
             const gamePos = { ...playerData.position };
+            console.log(playerData)
             if (!remotePlayers.has(id)) {
               remotePlayers.set(
                 id,
@@ -191,6 +200,8 @@ function App() {
                     `hsl(${Math.random() * 360}, 70%, 60%)`,
                   isLocal: false,
                   score: playerData.score || 0,
+                  X: playerData.location.x,
+                  Y: playerData.location.y,
                 })
               );
             } else {
@@ -204,6 +215,8 @@ function App() {
               }
               remotePlayer.velocity = playerData.velocity;
               remotePlayer.score = playerData.score || remotePlayer.score;
+              remotePlayer.X = playerData.location.x
+              remotePlayer.Y = playerData.location.y
             }
           });
           updateScoreboard();
@@ -324,6 +337,10 @@ function App() {
                 score: localPlayer.score,
                 position: { ...localPlayer.gamePos },
                 velocity: localPlayer.velocity,
+                location:{
+                  X:mapX,
+                  Y:mapY
+                },
               },
             })
           );
@@ -344,6 +361,8 @@ function App() {
     async function swapMap(newX,newY) {
       boundaries.length = 0;
       pellets.length = 0;
+      localPlayer.X = newX;
+      localPlayer.Y = newY;
       mapX = newX;
       mapY = newY;
       await loadMap();
@@ -361,6 +380,10 @@ function App() {
               velocity: localPlayer.velocity,
               color: localPlayer.color,
               score: localPlayer.score,
+              location:{
+                X:mapX,
+                Y:mapY
+              },
             },
           })
         );
@@ -428,8 +451,6 @@ function App() {
       if (keys.a.pressed) vx = -6;
       if (keys.d.pressed) vx = 6;
 
-      console.log(localPlayer.gamePos)
-
       const newGamePos = {
         x: localPlayer.gamePos.x + vx,
         y: localPlayer.gamePos.y + vy,
@@ -486,6 +507,10 @@ function App() {
                   pelletId: pellet.id,
                   id: localPlayer.id,
                   score: localPlayer.score,
+                  location:{
+                    X: mapX,
+                    Y: mapY
+                  },
                 },
               })
             );
