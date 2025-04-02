@@ -153,7 +153,7 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	}
 	statefulset.Spec.Replicas = ptr.To((*(statefulset.Spec.Replicas) + 1))
 	if len(statefulset.Spec.ReserveOrdinals) > 0 { // Allow recreating of the oldest deleted pod if applicable
-		statefulset.Spec.ReserveOrdinals = statefulset.Spec.ReserveOrdinals[1:len(statefulset.Spec.ReserveOrdinals)-1]
+		statefulset.Spec.ReserveOrdinals = statefulset.Spec.ReserveOrdinals[1:len(statefulset.Spec.ReserveOrdinals)]
 	}
 	statefulset, err = kruiseclient.AppsV1beta1().StatefulSets("default").Update(ctx, statefulset, metav1.UpdateOptions{})
 	if err != nil {
