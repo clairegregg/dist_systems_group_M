@@ -41,6 +41,10 @@ jobs:
         CHUNK3_CERT_DATA: ${{ secrets.CHUNK3_CERT_DATA }}
         CHUNK3_KEY_DATA: ${{ secrets.CHUNK3_KEY_DATA }}
         CHUNK3_SERVER: ${{ vars.CHUNK3_SERVER }}
+        CHUNK4_CERT_AUTH: ${{ secrets.CHUNK4_CERT_AUTH }}
+        CHUNK4_CERT_DATA: ${{ secrets.CHUNK4_CERT_DATA }}
+        CHUNK4_KEY_DATA: ${{ secrets.CHUNK4_KEY_DATA }}
+        CHUNK4_SERVER: ${{ vars.CHUNK4_SERVER }}
     - name: Deploy to K8s cluster
       uses: azure/k8s-deploy@v5
       with:
