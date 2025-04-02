@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: pacman-chunk
-           image: {{ .Values.pacmanChunk.image }}
+          image: {{ .Values.pacmanChunk.image }}
           ports:
             - containerPort: {{ .Values.pacmanChunk.port }}
           env:
