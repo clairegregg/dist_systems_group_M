@@ -1,14 +1,13 @@
-apiVersion: apps.kruise.io/v1alpha1
-kind: CloneSet
+apiVersion: apps.kruise.io/v1beta1
+kind: StatefulSet
 metadata:
-  labels:
-    app: pacman-chunk
   name: pacman-chunk
 spec:
-  replicas: {{ .Values.pacmanChunk.replicas }}
+  replicas: 3
   selector:
     matchLabels:
       app: pacman-chunk
+  serviceName: "pacman-chunk"  # Each headless service will be accessible as something like pacman-chunk-0.pacman-bhunk
   template:
     metadata:
       labels:
@@ -24,3 +23,5 @@ spec:
               value: {{ .Values.pacmanChunk.kafka }}
             - name: CENTRAL_SERVER_URL
               value: {{ .Values.pacmanChunk.centralServer }}
+            - name: CLUSTER_NUMBER
+              value: "{{ .Values.pacmanChunk.clusterNumber }}"

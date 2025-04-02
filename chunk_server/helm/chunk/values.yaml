@@ -13,6 +13,7 @@ pacmanChunk:
   port: 8080
   kafka: "kafka.clairegregg.com:6442"
   centralServer: "http://server.clairegregg.com:6441"
+  clusterNumber: ${CLUSTER_NUMBER}
 
 service:
   type: ClusterIP

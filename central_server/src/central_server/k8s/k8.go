@@ -76,28 +76,47 @@ func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, 
 	podName := "pacman-chunk-" + chunkId
 
 	// Get correct cluster client
+	var clientset *kubernetes.Clientset
 	var kruiseclient *kruiseclientset.Clientset
 	for _, client := range clients {
 		log.Printf("Cluster name is %v", client.clusterName)
 		if (client.clusterName == clusterName) || (client.clusterName == "kind-"+clusterName) {
 			kruiseclient = client.kruiseclient
+			clientset = client.clientset
 			break
 		}
 	}
-	if kruiseclient == nil {
+	if clientset == nil || kruiseclient == nil {
 		return fmt.Errorf("no clients match cluster name %v", clusterName)
 	}
 
+	// Get the current state of the statefulset, and remove one from replicas
+	statefulset, err := kruiseclient.AppsV1alpha1().StatefulSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	statefulset.Spec.Replicas = ptr.To((*(statefulset.Spec.Replicas) - 1))
+
 	// Delete the pod
-	cloneset, err := kruiseclient.AppsV1alpha1().CloneSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
+	pod, err := clientset.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
-	cloneset.Spec.ScaleStrategy.PodsToDelete = append(cloneset.Spec.ScaleStrategy.PodsToDelete, podName)
-	cloneset, err = kruiseclient.AppsV1alpha1().CloneSets("default").Update(ctx, cloneset, metav1.UpdateOptions{})
+	if pod.Labels == nil {
+		pod.Labels = make(map[string]string) 
+	}
+	pod.Labels["apps.kruise.io/specified-delete"] = "true" 
+	_, err = clientset.CoreV1().Pods("default").Update(ctx, pod, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("Failed to update pod to be deleted: %w", err)
+	}
+	
+	// Update StatefulSet with one less replica
+	statefulset, err = kruiseclient.AppsV1alpha1().StatefulSets("default").Update(ctx, statefulset, metav1.UpdateOptions{})
 	if err != nil {
 		return err
 	}
+	
 	return nil
 }
 
@@ -137,12 +156,12 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	resourceVersion := podList.ResourceVersion
 
 	// Add another replica to the cluster
-	cloneset, err := kruiseclient.AppsV1alpha1().CloneSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
+	statefulset, err := kruiseclient.AppsV1alpha1().StatefulSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
-	cloneset.Spec.Replicas = ptr.To((*(cloneset.Spec.Replicas) + 1))
-	cloneset, err = kruiseclient.AppsV1alpha1().CloneSets("default").Update(ctx, cloneset, metav1.UpdateOptions{})
+	statefulset.Spec.Replicas = ptr.To((*(statefulset.Spec.Replicas) + 1))
+	statefulset, err = kruiseclient.AppsV1alpha1().StatefulSets("default").Update(ctx, statefulset, metav1.UpdateOptions{})
 	if err != nil {
 		return "", err
 	}

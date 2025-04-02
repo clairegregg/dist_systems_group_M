@@ -27,12 +27,12 @@ var (
 	broadcastTopic = "central_to_chunk_broadcast"
 )
 
-func generateChunkID() string {
+func generateChunkID(clusterNumber string) string {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = fmt.Sprintf("chunk_server_%d", time.Now().Unix())
 	}
-	return hostname
+	return clusterNumber+"-"+hostname // For example, chunk server pacman-chunk-0 in cluster 4 will have the unique id of 4-pacman-chunk-0
 }
 
 func setupRouter() *gin.Engine {
@@ -147,7 +147,8 @@ func notifyCentralServer(centralServerURL string) error {
 }
 
 func main() {
-	chunkID = generateChunkID()
+	clusterNumber := os.Getenv("CLUSTER_NUMBER")
+	chunkID = generateChunkID(clusterNumber)
 	chunkTopic = fmt.Sprintf("central_to_chunk_%s", chunkID)
 	log.Printf("Chunk ID: %s", chunkID)
 	log.Printf("Chunk topic: %s", chunkTopic)
