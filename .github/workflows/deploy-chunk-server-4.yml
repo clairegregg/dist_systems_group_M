@@ -62,7 +62,7 @@ jobs:
           renderEngine: "helm"
           helmChart: ${{ env.CHART_PATH }}
           overrides: |
-            pacman.clusterNumber:"4"
+            pacmanChunk.clusterNumber:"4"
           helm-version: "latest"
         id: bake
 
