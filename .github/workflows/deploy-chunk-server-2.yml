@@ -32,4 +32,4 @@ jobs:
         KUBECONFIG: ${{ github.workspace }}/kubeconfig
       run: |
        cd chunk_server/helm/chunk       
-       helm upgrade --install chunk . --set pacmanChunk.clusterNumber=2
+       helm upgrade --install chunk . --set pacmanChunk.clusterNumber="2"
