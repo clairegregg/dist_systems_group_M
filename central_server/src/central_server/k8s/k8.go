@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -73,7 +74,6 @@ func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (int,
 func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, url string) error {
 	clusterName := strings.Split(url, ".")[0] // Extract just (EG) chunk1 from chunk1.clairegregg.com/?id=2
 	chunkId := strings.Split(url, "=")[1]     // Extract just (EG) 2 from chunk1.clairegregg.com/?id=2
-	podName := "pacman-chunk-" + chunkId
 
 	// Get correct cluster client
 	var clientset *kubernetes.Clientset
@@ -90,29 +90,20 @@ func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, 
 		return fmt.Errorf("no clients match cluster name %v", clusterName)
 	}
 
-	// Get the current state of the statefulset, and remove one from replicas
-	statefulset, err := kruiseclient.AppsV1alpha1().StatefulSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
+	// Get statefulset, remove one from replicas, and reserve the ordinal (pod number) until it is needed again
+	statefulset, err := kruiseclient.AppsV1beta1().StatefulSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 	statefulset.Spec.Replicas = ptr.To((*(statefulset.Spec.Replicas) - 1))
+	podOrdinal, err := strconv.Atoi(chunkId)
+	if err != nil {
+		return fmt.Errorf("Unable to retrieve pod ordinal for chunkID %v: %w", chunkId, err)
+	}
+	statefulset.Spec.ReserveOrdinals = append(statefulset.Spec.ReserveOrdinals, podOrdinal) // Make sure, eg pacman-chunk-7 isn't immediately recreated
 
-	// Delete the pod
-	pod, err := clientset.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	if pod.Labels == nil {
-		pod.Labels = make(map[string]string) 
-	}
-	pod.Labels["apps.kruise.io/specified-delete"] = "true" 
-	_, err = clientset.CoreV1().Pods("default").Update(ctx, pod, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("Failed to update pod to be deleted: %w", err)
-	}
-	
-	// Update StatefulSet with one less replica
-	statefulset, err = kruiseclient.AppsV1alpha1().StatefulSets("default").Update(ctx, statefulset, metav1.UpdateOptions{})
+	// Update StatefulSet 
+	statefulset, err = kruiseclient.AppsV1beta1().StatefulSets("default").Update(ctx, statefulset, metav1.UpdateOptions{})
 	if err != nil {
 		return err
 	}
@@ -156,12 +147,15 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	resourceVersion := podList.ResourceVersion
 
 	// Add another replica to the cluster
-	statefulset, err := kruiseclient.AppsV1alpha1().StatefulSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
+	statefulset, err := kruiseclient.AppsV1beta1().StatefulSets("default").Get(ctx, "pacman-chunk", metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
 	statefulset.Spec.Replicas = ptr.To((*(statefulset.Spec.Replicas) + 1))
-	statefulset, err = kruiseclient.AppsV1alpha1().StatefulSets("default").Update(ctx, statefulset, metav1.UpdateOptions{})
+	if len(statefulset.Spec.ReserveOrdinals) > 0 { // Allow recreating of the oldest deleted pod if applicable
+		statefulset.Spec.ReserveOrdinals = statefulset.Spec.ReserveOrdinals[1:len(statefulset.Spec.ReserveOrdinals)-1]
+	}
+	statefulset, err = kruiseclient.AppsV1beta1().StatefulSets("default").Update(ctx, statefulset, metav1.UpdateOptions{})
 	if err != nil {
 		return "", err
 	}
