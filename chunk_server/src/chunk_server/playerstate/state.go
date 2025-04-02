@@ -14,6 +14,13 @@ type Position struct {
 	Y float64 `json:"y"`
 }
 
+// Location holds the location of the object within the 16 grids managed by each
+// chunk server. Both can hold values between 0-3.
+type Location struct {
+	X int 	`json:"x"`
+	Y int 	`json:"y"`
+}
+
 // Velocity holds the x and y velocity components.
 type Velocity struct {
 	X float64 `json:"x"`
@@ -28,6 +35,7 @@ type PlayerState struct {
 	Velocity Velocity `json:"velocity"`
 	Score    int      `json:"score"`
 	Status   string   `json:"status"` // "active" or "left"
+	Location Location `json:"location"`
 }
 
 // gameStatePayload wraps the players map.
@@ -108,28 +116,60 @@ func GetGameState() map[string]PlayerState {
 // of pellets that have been eaten. Clients initially load the full pellet map (e.g., from the map API),
 // then apply these removals.
 // We store the eaten pellet IDs in a thread-safe map.
-var eatenPellets = struct {
+// var eatenPellets = struct {
+// 	mu sync.RWMutex
+// 	m  map[string]bool
+// }{
+// 	m: make(map[string]bool),
+// }
+
+type eatenPellets = struct {
 	mu sync.RWMutex
-	m  map[string]bool
-}{
-	m: make(map[string]bool),
+	m map[string]bool
+}
+
+
+// Not used to golang so just did what worked
+var pelletMap = [16]eatenPellets{
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m:make(map[string]bool)},
+}
+
+func mapLocation(X int, Y int) int {
+	return X*4+Y
 }
 
 // RemovePellet marks a pellet as eaten by its ID.
-func RemovePellet(pelletID string) {
-	eatenPellets.mu.Lock()
-	defer eatenPellets.mu.Unlock()
-	eatenPellets.m[pelletID] = true
+func RemovePellet(pelletID string, X int, Y int) {
+	var loc = mapLocation(X,Y)
+	pelletMap[loc].mu.Lock()
+	defer pelletMap[loc].mu.Unlock()
+	pelletMap[loc].m[pelletID] = true
 	log.Printf("Pellet %s marked as eaten", pelletID)
 }
 
 // GetEatenPellets returns a slice of eaten pellet IDs and then clears the stored map.
 // This acts as a "delta" so that each call returns only new removals.
-func GetEatenPellets() []string {
-	eatenPellets.mu.RLock()
-	defer eatenPellets.mu.RUnlock()
-	ids := make([]string, 0, len(eatenPellets.m))
-	for id := range eatenPellets.m {
+func GetEatenPellets(X int, Y int) []string {
+	var loc = mapLocation(X,Y)
+	pelletMap[loc].mu.RLock()
+	defer pelletMap[loc].mu.RUnlock()
+	ids := make([]string, 0, len(pelletMap[loc].m))
+	for id := range pelletMap[loc].m {
 		ids = append(ids, id)
 	}
 	return ids
@@ -145,7 +185,7 @@ type combinedStatePayload struct {
 
 // GetCombinedGameStateJSON returns a combined JSON payload of players and eaten pellet IDs.
 // It uses GetEatenPellets() to get the delta of pellet deletions.
-func GetCombinedGameStateJSON() []byte {
+func GetCombinedGameStateJSON(X int, Y int) []byte {
 	// Copy players state.
 	globalGameState.mu.RLock()
 	playersCopy := make(map[string]PlayerState, len(globalGameState.Players))
@@ -155,7 +195,7 @@ func GetCombinedGameStateJSON() []byte {
 	globalGameState.mu.RUnlock()
 
 	// Get the eaten pellet IDs (delta).
-	eaten := GetEatenPellets()
+	eaten := GetEatenPellets(X,Y)
 
 	payload := combinedStatePayload{
 		Players:      playersCopy,

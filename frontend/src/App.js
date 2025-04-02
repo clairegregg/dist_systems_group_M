@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import GlobalLeaderboard from "./GlobalLeaderboard";
+import map from "./maps"
 
 
 function App() {
@@ -13,15 +14,19 @@ function App() {
   // Use sessionStorage so that the player ID persists across refreshes but clears when the tab is closed.
   const storedPlayer = sessionStorage.getItem("localPlayer");
   const initialPlayer = storedPlayer ? JSON.parse(storedPlayer) : null;
+  const maps = []
+  for (let item in map){
+    maps.push(map[item])
+  }
   // If an ID already exists, use it; otherwise, generate a new one.
   const localPlayerIdRef = useRef(
     initialPlayer?.id ||
-      Date.now().toString() + Math.random().toString(36).substring(2)
+    Date.now().toString() + Math.random().toString(36).substring(2)
   );
   
   // gridOffsetRef translates game world coordinates into screen coordinates.
   const gridOffsetRef = useRef({ x: 0, y: 0 });
-
+  
   // State for map and loaded flag.
   const [localMap, setLocalMap] = useState([]);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -29,16 +34,18 @@ function App() {
   useEffect(() => {
     mapLoadedRef.current = mapLoaded;
   }, [mapLoaded]);
-
+  
   // Persist local player data in sessionStorage.
   function saveLocalPlayer(player) {
     sessionStorage.setItem("localPlayer", JSON.stringify(player));
   }
-
+  
   useEffect(() => {
     // Do NOT clear sessionStorage on beforeunload; this allows the ID to persist through refresh.
     // Only the WebSocket connection will be closed on unload.
     
+    let mapX = 1
+    let mapY = 1
     const canvas = canvasRef.current;
     const scoreEl = scoreElRef.current;
     const scoreboardEl = scoreboardRef.current;
@@ -67,7 +74,7 @@ function App() {
     }
 
     class Player {
-      constructor({ id, gamePos, velocity, color, isLocal, score = 0 }) {
+      constructor({ id, gamePos, velocity, color, isLocal, score = 0,X,Y }) {
         this.id = id;
         this.gamePos = { ...gamePos };
         this.velocity = velocity;
@@ -77,6 +84,8 @@ function App() {
         this.score = score;
         this.targetGamePos = { ...gamePos };
         this.lastUpdate = Date.now();
+        this.X = X;
+        this.Y = Y;
       }
       update(delta) {
         if (!this.isLocal) {
@@ -91,7 +100,10 @@ function App() {
             this.gamePos.y += dy * delta * smoothingFactor;
           }
         }
-        this.draw();
+        console.log(`Player: ${this.id}, X:${this.X}, Y:${this.Y}`)
+        if(this.X === mapX && this.Y === mapY){
+          this.draw();
+        }
       }
       draw() {
         const screenX = gridOffsetRef.current.x + this.gamePos.x;
@@ -138,11 +150,15 @@ function App() {
       color: localPlayerColor,
       isLocal: true,
       score: initialPlayer?.score || 0,
+      X:initialPlayer?.X || mapX,
+      Y:initialPlayer?.Y || mapY
     });
     saveLocalPlayer({
       id: localPlayer.id,
       color: localPlayer.color,
       score: localPlayer.score,
+      X:mapX,
+      Y:mapY
     });
 
     const keys = {
@@ -171,6 +187,7 @@ function App() {
               return;
             }
             const gamePos = { ...playerData.position };
+            console.log(playerData)
             if (!remotePlayers.has(id)) {
               remotePlayers.set(
                 id,
@@ -183,6 +200,8 @@ function App() {
                     `hsl(${Math.random() * 360}, 70%, 60%)`,
                   isLocal: false,
                   score: playerData.score || 0,
+                  X: playerData.location.x,
+                  Y: playerData.location.y,
                 })
               );
             } else {
@@ -196,6 +215,8 @@ function App() {
               }
               remotePlayer.velocity = playerData.velocity;
               remotePlayer.score = playerData.score || remotePlayer.score;
+              remotePlayer.X = playerData.location.x
+              remotePlayer.Y = playerData.location.y
             }
           });
           updateScoreboard();
@@ -265,16 +286,15 @@ function App() {
 
     async function loadMap() {
       try {
-        const res = await fetch(CHUCK_URL);
-        if (!res.ok) {
-          console.error("Failed to fetch map, status:", res.status);
-          return;
-        }
-        const map = await res.json();
-        setLocalMap(map);
-
-        const rows = map.length;
-        const cols = map[0].length;
+        // const res = await fetch(CHUCK_URL);
+        // if (!res.ok) {
+        //   console.error("Failed to fetch map, status:", res.status);
+        //   return;
+        // }
+        // const map = await res.json();
+        setLocalMap(maps[mapX*4+mapY]);
+        const rows = maps[0].length;
+        const cols = maps[0][0].length;
         const gridWidth = cols * CELL_SIZE;
         const gridHeight = rows * CELL_SIZE;
         const offsetX = (canvas.width - gridWidth) / 2;
@@ -283,7 +303,7 @@ function App() {
 
         boundaries.length = 0;
         pellets.length = 0;
-        map.forEach((row, i) => {
+        maps[mapX*4+mapY].forEach((row, i) => {
           row.forEach((symbol, j) => {
             if (symbol === "1") {
               boundaries.push(
@@ -317,6 +337,10 @@ function App() {
                 score: localPlayer.score,
                 position: { ...localPlayer.gamePos },
                 velocity: localPlayer.velocity,
+                location:{
+                  X:mapX,
+                  Y:mapY
+                },
               },
             })
           );
@@ -334,6 +358,17 @@ function App() {
       console.log("Map reloaded");
     }
 
+    async function swapMap(newX,newY) {
+      boundaries.length = 0;
+      pellets.length = 0;
+      localPlayer.X = newX;
+      localPlayer.Y = newY;
+      mapX = newX;
+      mapY = newY;
+      await loadMap();
+      console.log("Swapped Map")
+    }
+
     function sendPlayerUpdate() {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(
@@ -345,6 +380,10 @@ function App() {
               velocity: localPlayer.velocity,
               color: localPlayer.color,
               score: localPlayer.score,
+              location:{
+                X:mapX,
+                Y:mapY
+              },
             },
           })
         );
@@ -383,6 +422,22 @@ function App() {
 
     function animate() {
       animationFrameId = requestAnimationFrame(animate);
+      if (localPlayer.gamePos.x < 0){
+        localPlayer.gamePos.x = 650
+        swapMap(mapX+1,mapY)
+      }
+      else if (localPlayer.gamePos.x > 650){
+        localPlayer.gamePos.x = 0
+        swapMap(mapX-1,mapY)
+      }
+      else if(localPlayer.gamePos.y < 0 ){
+        localPlayer.gamePos.y = 650
+        swapMap(mapX,mapY+1)
+      }
+      else if(localPlayer.gamePos.y > 650 ){
+        localPlayer.gamePos.y = 0
+        swapMap(mapX,mapY-1)
+      }
       const now = performance.now();
       const rawDelta = (now - lastFrameTime) / 1000;
       const delta = Math.min(rawDelta, 0.05);
@@ -452,6 +507,10 @@ function App() {
                   pelletId: pellet.id,
                   id: localPlayer.id,
                   score: localPlayer.score,
+                  location:{
+                    X: mapX,
+                    Y: mapY
+                  },
                 },
               })
             );

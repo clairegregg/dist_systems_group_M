@@ -31,14 +31,15 @@ type MessageEnvelope struct {
 
 // BroadcastGameState sends the current combined game state (players and eaten pellet IDs)
 // to all connected clients.
+
+// TODO: not sure if the game state is reference or new object when returned 
 func BroadcastGameState() {
-	state := playerstate.GetCombinedGameStateJSON()
-	if state == nil {
-		return
-	}
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	for conn := range clients {
+		gameState := playerstate.GetGameState()
+		var player = gameState[clients[conn]]
+		state := playerstate.GetCombinedGameStateJSON(player.Location.X,player.Location.Y)
 		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := conn.WriteMessage(websocket.TextMessage, state); err != nil {
 			log.Printf("Broadcast write error: %v", err)
@@ -73,7 +74,7 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Send the initial game state to the new client.
-	if state := playerstate.GetCombinedGameStateJSON(); state != nil {
+	if state := playerstate.GetCombinedGameStateJSON(1,1); state != nil {
 		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := conn.WriteMessage(websocket.TextMessage, state); err != nil {
 			log.Printf("Error writing initial game state: %v", err)
@@ -115,13 +116,14 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 				// Optionally include PlayerID and Score if needed.
 				PlayerID string `json:"id"`
 				Score    int    `json:"score"`
+				Location playerstate.Location `json:"location"`
 			}
 			if err := json.Unmarshal(envelope.Data, &pelletUpdate); err != nil {
 				log.Printf("Error parsing pellet update: %v", err)
 				continue
 			}
 			// Mark the pellet as eaten globally.
-			playerstate.RemovePellet(pelletUpdate.PelletID)
+			playerstate.RemovePellet(pelletUpdate.PelletID, pelletUpdate.Location.X,pelletUpdate.Location.Y)
 			// Broadcast the updated game state immediately.
 			BroadcastGameState()
 		default:
