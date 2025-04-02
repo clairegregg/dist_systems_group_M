@@ -24,4 +24,4 @@ spec:
             - name: CENTRAL_SERVER_URL
               value: {{ .Values.pacmanChunk.centralServer }}
             - name: CLUSTER_NUMBER
-              value: {{ .Values.pacmanChunk.clusterNumber }}
+              value: "{{ .Values.pacmanChunk.clusterNumber }}"
