@@ -39,7 +39,34 @@ function App() {
   function saveLocalPlayer(player) {
     sessionStorage.setItem("localPlayer", JSON.stringify(player));
   }
-  
+
+  // --- Ghost Class (from old_app.js) ---
+  class Ghost {
+    constructor({ id, position, velocity }) {
+      this.id = id;
+      this.position = { ...position };
+      this.velocity = velocity;
+      this.radius = 15;
+      this.targetPosition = { ...position };
+    }
+    update() {
+      // Smoothly interpolate toward the target position.
+      this.position.x += (this.targetPosition.x - this.position.x) * 0.3;
+      this.position.y += (this.targetPosition.y - this.position.y) * 0.3;
+      this.draw();
+    }
+    draw() {
+      const screenX = gridOffsetRef.current.x + this.position.x;
+      const screenY = gridOffsetRef.current.y + this.position.y;
+      const c = canvasRef.current.getContext("2d");
+      c.beginPath();
+      c.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
+      c.fillStyle = "red";
+      c.fill();
+      c.closePath();
+    }
+  }
+
   useEffect(() => {
     // Do NOT clear sessionStorage on beforeunload; this allows the ID to persist through refresh.
     // Only the WebSocket connection will be closed on unload.
@@ -135,6 +162,7 @@ function App() {
 
     // --- Collections for game objects ---
     const remotePlayers = new Map();
+    const remoteGhosts = new Map();
     const pellets = [];
     const boundaries = [];
 
@@ -233,6 +261,36 @@ function App() {
             }
           });
         }
+        // Process ghost state.
+        if (data.ghosts) {
+          //const activeMapIndex = mapX * 4 + mapY; 
+          Object.entries(data.ghosts).forEach(([id, ghostData]) => {
+
+            if (!id.startsWith(`map${mapX * 4 + mapY}_`)) {
+              return; // Skip ghosts from other maps.
+            }
+
+            const absPos = {
+              x: ghostData.position.x,
+              y: ghostData.position.y,
+            };
+            if (!remoteGhosts.has(id)) {
+              remoteGhosts.set(
+                id,
+                new Ghost({
+                  id,
+                  position: absPos,
+                  velocity: ghostData.velocity,
+                })
+              );
+              console.log(`Spawned ghost ${id} at position:`, absPos);
+            } else {
+              const ghost = remoteGhosts.get(id);
+              ghost.targetPosition = absPos;
+              ghost.velocity = ghostData.velocity;
+            }
+          });
+        }
       } catch (err) {
         console.error("Error processing remote message:", err, messageData);
       }
@@ -284,6 +342,83 @@ function App() {
       );
     }
 
+    // Define hardcoded ghost spawn positions for each map (map index = mapX * 4 + mapY)
+    const ghostSpawnPositionsByMap = {
+      // Map index 0 (for example, map1)
+      0: [
+        { x: 260, y: 300 },
+        { x: 420, y: 300 },
+        { x: 260, y: 420 },
+        { x: 420, y: 420 }
+      ],
+      1: [
+        { x: 260, y: 260 },
+        { x: 420, y: 260 },
+        { x: 260, y: 420 },
+        { x: 420, y: 420 }
+      ],
+      2: [
+        { x: 300, y: 340 },
+        { x: 380, y: 340 },
+        { x: 300, y: 420 },
+        { x: 380, y: 420 }
+      ],
+      3: [
+        { x: 260, y: 220 },
+        { x: 420, y: 220 },
+        { x: 260, y: 460 },
+        { x: 420, y: 460 }
+      ],
+      4: [
+        { x: 260, y: 300 },
+        { x: 420, y: 300 },
+        { x: 260, y: 380 },
+        { x: 420, y: 380 }
+      ],
+      5: [
+        { x: 300, y: 340 }, 
+        { x: 340, y: 300 },
+        { x: 380, y: 340 },
+        { x: 340, y: 380 }
+      ],
+      6: [
+        { x: 260, y: 260 },
+        { x: 420, y: 260 },
+        { x: 260, y: 380 },
+        { x: 420, y: 380 }
+      ],
+      7: [
+        { x: 260, y: 260 },
+        { x: 420, y: 260 },
+        { x: 260, y: 420 },
+        { x: 420, y: 420 }
+      ],
+      8: [
+        { x: 300, y: 300 },
+        { x: 380, y: 300 },
+        { x: 300, y: 380 },
+        { x: 380, y: 380 }
+      ],
+      9: [
+        { x: 260, y: 220 },
+        { x: 420, y: 220 },
+        { x: 260, y: 460 },
+        { x: 420, y: 460 }
+      ],
+      10: [
+        { x: 260, y: 300 },
+        { x: 420, y: 300 },
+        { x: 260, y: 380 },
+        { x: 420, y: 380 }
+      ],
+      11: [
+        { x: 300, y: 340 }, 
+        { x: 340, y: 300 },
+        { x: 380, y: 340 },
+        { x: 340, y: 380 }
+      ],
+    };
+
     async function loadMap() {
       try {
         // const res = await fetch(CHUCK_URL);
@@ -292,6 +427,7 @@ function App() {
         //   return;
         // }
         // const map = await res.json();
+        const currentMap = maps[mapX * 4 + mapY];
         setLocalMap(maps[mapX*4+mapY]);
         const rows = maps[0].length;
         const cols = maps[0][0].length;
@@ -321,6 +457,28 @@ function App() {
             }
           });
         });
+
+        // --- Hardcoded Ghost Spawning ---
+        // const mapIndex = mapX * 4 + mapY;
+        // console.log(mapIndex);
+        // const ghostPositions = ghostSpawnPositionsByMap[mapIndex] || [];
+        // ghostPositions.forEach((pos, i) => {
+        //   const ghostID = `ghost_${i}`;
+        //   // Adjust the ghost position by adding the grid offset.
+        //   const absPos = {
+        //     x: pos.x,
+        //     y: pos.y,
+        //   };
+        //   remoteGhosts.set(
+        //     ghostID,
+        //     new Ghost({
+        //       id: ghostID,
+        //       position: absPos,
+        //       velocity: { x: 0, y: 0 },
+        //     })
+        //   );
+        //   console.log(`Spawned ghost ${ghostID} at position:`, absPos);
+        // });
 
         setMapLoaded(true);
         remoteMessageQueue.forEach((msg) => processRemoteMessage(msg));
@@ -530,6 +688,13 @@ function App() {
       }
       remotePlayers.forEach((player) => {
         player.update(delta);
+      });
+
+      // Update and draw remote ghosts only if they belong to the active map.
+      remoteGhosts.forEach((ghost, id) => {
+        if (id.startsWith(`map${mapX * 4 + mapY}_`)) {
+          ghost.update();
+        }
       });
     }
 

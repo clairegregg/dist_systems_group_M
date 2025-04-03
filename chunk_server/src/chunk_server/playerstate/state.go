@@ -2,9 +2,12 @@ package playerstate
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 )
+
+var CurrentChunkKey string
 
 // ------------------ Player State ------------------
 
@@ -17,14 +20,65 @@ type Position struct {
 // Location holds the location of the object within the 16 grids managed by each
 // chunk server. Both can hold values between 0-3.
 type Location struct {
-	X int 	`json:"x"`
-	Y int 	`json:"y"`
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 
 // Velocity holds the x and y velocity components.
 type Velocity struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
+}
+
+// Ghosts
+
+// Ghosts
+type GhostState struct {
+	ID       string   `json:"id"`
+	Position Position `json:"position"`
+	Velocity Velocity `json:"velocity"`
+}
+
+type GlobalGhostState struct {
+	Ghosts map[string]map[string]GhostState // map[chunkID][ghostID]
+	mu     sync.RWMutex
+}
+
+var globalGhostState = GlobalGhostState{
+	Ghosts: make(map[string]map[string]GhostState),
+}
+
+func UpdateGhostState(chunkID string, gs GhostState) {
+	globalGhostState.mu.Lock()
+	defer globalGhostState.mu.Unlock()
+
+	if globalGhostState.Ghosts[chunkID] == nil {
+		globalGhostState.Ghosts[chunkID] = make(map[string]GhostState)
+	}
+	globalGhostState.Ghosts[chunkID][gs.ID] = gs
+}
+
+func RemoveGhost(chunkID, ghostID string) {
+	globalGhostState.mu.Lock()
+	defer globalGhostState.mu.Unlock()
+
+	if chunkGhosts, ok := globalGhostState.Ghosts[chunkID]; ok {
+		delete(chunkGhosts, ghostID)
+	}
+}
+
+func GetGhosts(chunkID string) map[string]GhostState {
+	globalGhostState.mu.RLock()
+	defer globalGhostState.mu.RUnlock()
+
+	// Return a copy of the chunk’s ghosts
+	ghostsCopy := make(map[string]GhostState)
+	if chunkGhosts, ok := globalGhostState.Ghosts[chunkID]; ok {
+		for id, ghost := range chunkGhosts {
+			ghostsCopy[id] = ghost
+		}
+	}
+	return ghostsCopy
 }
 
 // PlayerState represents the state of an individual player.
@@ -84,6 +138,31 @@ func RemovePlayerState(playerID string) {
 	log.Printf("Removed player state for %s", playerID)
 }
 
+func GetPlayers() map[string]PlayerState {
+	globalGameState.mu.RLock()
+	defer globalGameState.mu.RUnlock()
+
+	copy := make(map[string]PlayerState)
+	for id, player := range globalGameState.Players {
+		copy[id] = player
+	}
+	return copy
+}
+
+// Only return players in a specific map chunk
+func GetPlayersInChunk(x, y int) map[string]PlayerState {
+	globalGameState.mu.RLock()
+	defer globalGameState.mu.RUnlock()
+
+	result := make(map[string]PlayerState)
+	for id, p := range globalGameState.Players {
+		if p.Location.X == x && p.Location.Y == y {
+			result[id] = p
+		}
+	}
+	return result
+}
+
 // GetGameStateJSON returns the current game state (players only) as JSON.
 func GetGameStateJSON() []byte {
 	globalGameState.mu.RLock()
@@ -125,37 +204,36 @@ func GetGameState() map[string]PlayerState {
 
 type eatenPellets = struct {
 	mu sync.RWMutex
-	m map[string]bool
+	m  map[string]bool
 }
-
 
 // Not used to golang so just did what worked
 var pelletMap = [16]eatenPellets{
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
-	eatenPellets{m:make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
+	eatenPellets{m: make(map[string]bool)},
 }
 
 func mapLocation(X int, Y int) int {
-	return X*4+Y
+	return X*4 + Y
 }
 
 // RemovePellet marks a pellet as eaten by its ID.
 func RemovePellet(pelletID string, X int, Y int) {
-	var loc = mapLocation(X,Y)
+	var loc = mapLocation(X, Y)
 	pelletMap[loc].mu.Lock()
 	defer pelletMap[loc].mu.Unlock()
 	pelletMap[loc].m[pelletID] = true
@@ -165,7 +243,7 @@ func RemovePellet(pelletID string, X int, Y int) {
 // GetEatenPellets returns a slice of eaten pellet IDs and then clears the stored map.
 // This acts as a "delta" so that each call returns only new removals.
 func GetEatenPellets(X int, Y int) []string {
-	var loc = mapLocation(X,Y)
+	var loc = mapLocation(X, Y)
 	pelletMap[loc].mu.RLock()
 	defer pelletMap[loc].mu.RUnlock()
 	ids := make([]string, 0, len(pelletMap[loc].m))
@@ -181,6 +259,7 @@ func GetEatenPellets(X int, Y int) []string {
 type combinedStatePayload struct {
 	Players      map[string]PlayerState `json:"players"`
 	EatenPellets []string               `json:"eatenPellets"`
+	Ghosts       map[string]GhostState  `json:"ghosts"`
 }
 
 // GetCombinedGameStateJSON returns a combined JSON payload of players and eaten pellet IDs.
@@ -195,11 +274,22 @@ func GetCombinedGameStateJSON(X int, Y int) []byte {
 	globalGameState.mu.RUnlock()
 
 	// Get the eaten pellet IDs (delta).
-	eaten := GetEatenPellets(X,Y)
+	eaten := GetEatenPellets(X, Y)
+
+	// Use the global chunk key if set.
+	var ghosts map[string]GhostState
+	if CurrentChunkKey != "" {
+		ghosts = GetGhosts(CurrentChunkKey)
+	} else {
+		// Fallback if for some reason CurrentChunkKey isn’t set.
+		chunkKey := fmt.Sprintf("%d-%d", X, Y)
+		ghosts = GetGhosts(chunkKey)
+	}
 
 	payload := combinedStatePayload{
 		Players:      playersCopy,
 		EatenPellets: eaten,
+		Ghosts:       ghosts,
 	}
 	state, err := json.Marshal(payload)
 	if err != nil {
