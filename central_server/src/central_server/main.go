@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,12 +14,14 @@ import (
 
 	"github.com/Cormuckle/dist_systems_group_M/central_server/k8s"
 	"github.com/Cormuckle/dist_systems_group_M/central_server/kafka"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// Global variables and configurations.
 var (
 	client          *mongo.Client
 	mongoURI        = os.Getenv("MONGO_URI")
@@ -33,30 +36,14 @@ var (
 	clusterClients  []*k8s.ClusterClient
 )
 
-// connectToDB initializes a MongoDB connection.
-func connectToDB(ctx context.Context) (*mongo.Client, error) {
-	if mongoURI == "" {
-		log.Println("Warning: MONGO_URI is not set, using default localhost.")
-		mongoURI = "mongodb://localhost:27017"
-	}
-
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
-	if err != nil {
-		return nil, fmt.Errorf("unable to connect to MongoDB: %v", err)
-	}
-
-	log.Println("Connected to MongoDB")
-	return client, nil
-}
-
-// MongoDB Data Types
+// MongoDB Data Types.
 type Chunk struct {
 	X   int    `bson:"x"`
 	Y   int    `bson:"y"`
 	Url string `bson:"url"`
 }
 
-// Request/Response models
+// Request/Response models (omitted for brevity; keep your existing models).
 type CreateUserRequest struct {
 	UserName   string `json:"userName" binding:"required"`
 	PacmanBody string `json:"pacmanBody"`
@@ -115,17 +102,18 @@ type LeaderboardEntry struct {
 // setupRouter initializes HTTP routes.
 func setupRouter() *gin.Engine {
 	r := gin.Default()
+	r.Use(cors.Default())
 
 	r.GET("/dbconn", func(c *gin.Context) {
-		// Ping the database
 		err := client.Ping(context.Background(), nil)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to connect to database"})
+			return
 		}
-
 		c.String(http.StatusOK, "Able to connect to DB")
 	})
-	// Health check
+
+	// Health check.
 	r.GET("/ping", func(c *gin.Context) {
 		c.String(http.StatusOK, "pong")
 	})
@@ -140,33 +128,24 @@ func setupRouter() *gin.Engine {
 		}
 	})
 
-	// Authorized group (uses gin.BasicAuth() middleware)
-	// Same than:
-	// authorized := r.Group("/")
-	// authorized.Use(gin.BasicAuth(gin.Credentials{
-	//	  "foo":  "bar",
-	//	  "manu": "123",
-	//}))
 	authorized := r.Group("/", gin.BasicAuth(gin.Accounts{
-		"foo":  "bar", // user:foo password:bar
-		"manu": "123", // user:manu password:123
+		"foo":  "bar",
+		"manu": "123",
 	}))
 
 	authorized.POST("admin", func(c *gin.Context) {
 		user := c.MustGet(gin.AuthUserKey).(string)
-
-		// Parse JSON
-		var json struct {
+		var jsonData struct {
 			Value string `json:"value" binding:"required"`
 		}
-
-		if c.Bind(&json) == nil {
-			db[user] = json.Value
+		if c.Bind(&jsonData) == nil {
+			db[user] = jsonData.Value
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		}
 	})
 
-	// ------------------------------- API Endpoints for the Central Server
+	// --- API Endpoints for the Central Server (users, scores, map, etc.)
+	// (Omitted for brevity; keep your existing endpoints.)
 
 	// create new user
 	r.POST("/users", func(c *gin.Context) {
@@ -405,11 +384,140 @@ func setupRouter() *gin.Engine {
 	/*
 		curl -X GET http://<central_server_host>:8080/list_chunks
 	*/
+	// List all registered chunk servers.
 	r.GET("/list_chunks", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"chunk_servers": chunkServers})
 	})
 
 	return r
+}
+
+// connectToDB initializes a MongoDB connection.
+func connectToDB(ctx context.Context) (*mongo.Client, error) {
+	if mongoURI == "" {
+		log.Println("Warning: MONGO_URI is not set, using default localhost.")
+		mongoURI = "mongodb://localhost:27017"
+	}
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	if err != nil {
+		return nil, fmt.Errorf("unable to connect to MongoDB: %v", err)
+	}
+
+	log.Println("Connected to MongoDB")
+	return client, nil
+}
+
+// waitForCentralServer repeatedly pings the central server until it responds.
+func waitForCentralServer(centralURL string) {
+	for {
+		resp, err := http.Get(centralURL + "/ping")
+		if err == nil && resp.StatusCode == http.StatusOK {
+			log.Printf("Central server is up at %s", centralURL)
+			return
+		}
+		log.Printf("Central server not ready at %s. Retrying in 5 seconds...", centralURL)
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// broadcastSync queries the database for the leaderboard, active, and left players
+// and then broadcasts a sync message to chunk servers every second.
+func broadcastSync(ctx context.Context) {
+	collection := client.Database("game").Collection("users")
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+
+		// Query leaderboard (top 10 by highScore).
+		ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+		opts := options.Find().SetSort(bson.D{{Key: "highScore", Value: -1}}).SetLimit(10)
+		cursor, err := collection.Find(ctxTimeout, bson.M{}, opts)
+		var leaderboard []LeaderboardEntry
+		if err == nil {
+			for cursor.Next(ctxTimeout) {
+				var doc struct {
+					UserName  string `bson:"userName"`
+					HighScore int    `bson:"highScore"`
+				}
+				if err := cursor.Decode(&doc); err != nil {
+					continue
+				}
+				leaderboard = append(leaderboard, LeaderboardEntry{
+					UserName: doc.UserName,
+					Score:    doc.HighScore,
+				})
+			}
+			cursor.Close(ctxTimeout)
+		}
+		cancel()
+
+		// Query active players.
+		ctxTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
+		cursor, err = collection.Find(ctxTimeout, bson.M{"status": "active"})
+		var activePlayers []LeaderboardEntry
+		if err == nil {
+			for cursor.Next(ctxTimeout) {
+				var doc struct {
+					UserName string `bson:"userName"`
+					Score    int    `bson:"score"`
+				}
+				if err := cursor.Decode(&doc); err != nil {
+					continue
+				}
+				activePlayers = append(activePlayers, LeaderboardEntry{
+					UserName: doc.UserName,
+					Score:    doc.Score,
+				})
+			}
+			cursor.Close(ctxTimeout)
+		}
+		cancel()
+
+		// Query left players.
+		ctxTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
+		cursor, err = collection.Find(ctxTimeout, bson.M{"status": "left"})
+		var leftPlayers []LeaderboardEntry
+		if err == nil {
+			for cursor.Next(ctxTimeout) {
+				var doc struct {
+					UserName string `bson:"userName"`
+					Score    int    `bson:"score"`
+				}
+				if err := cursor.Decode(&doc); err != nil {
+					continue
+				}
+				leftPlayers = append(leftPlayers, LeaderboardEntry{
+					UserName: doc.UserName,
+					Score:    doc.Score,
+				})
+			}
+			cursor.Close(ctxTimeout)
+		}
+		cancel()
+
+		// Construct the sync message.
+		syncMessage := map[string]interface{}{
+			"leaderboard": leaderboard,
+			"active":      activePlayers,
+			"left":        leftPlayers,
+		}
+		msgData, err := json.Marshal(syncMessage)
+		if err != nil {
+			log.Printf("Error marshaling sync message: %v", err)
+			continue
+		}
+
+		// Send the sync message to the broadcast topic.
+		err = kafkaProducer.SendMessage(broadcastTopic, string(msgData))
+		if err != nil {
+			log.Printf("Error sending sync message: %v", err)
+		} else {
+			log.Printf("Broadcasted sync message: %s", string(msgData))
+		}
+	}
 }
 
 // consumeChunkMessages listens for messages from chunk servers.
@@ -421,6 +529,88 @@ func consumeChunkMessages(ctx context.Context) {
 			continue
 		}
 		log.Printf("Received message from chunk server: %s\n", message)
+
+		// Check for registration messages.
+		if strings.HasPrefix(message, "REGISTER:") {
+			regID := strings.TrimPrefix(message, "REGISTER:")
+			// Avoid duplicate registrations.
+			alreadyRegistered := false
+			for _, id := range chunkServers {
+				if id == regID {
+					alreadyRegistered = true
+					break
+				}
+			}
+			if !alreadyRegistered {
+				chunkServers = append(chunkServers, regID)
+				log.Printf("Registered new chunk server via Kafka: %s", regID)
+			} else {
+				log.Printf("Chunk server %s already registered", regID)
+			}
+			continue
+		}
+
+		// Check for map requests.
+		if strings.HasPrefix(message, "GET_MAP:") {
+			coord := strings.TrimPrefix(message, "GET_MAP:")
+			coord = strings.Trim(coord, "\"")
+			log.Printf("Central server: Received GET_MAP request for coordinate: %s", coord)
+			collection := client.Database("game").Collection("maps")
+			ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			var result struct {
+				Coordinate string     `bson:"coordinate"`
+				Map        [][]string `bson:"map"`
+			}
+			err := collection.FindOne(ctxTimeout, bson.M{"coordinate": coord}).Decode(&result)
+			if err != nil {
+				if coord != "0,0" {
+					err = collection.FindOne(ctxTimeout, bson.M{"coordinate": "0,0"}).Decode(&result)
+					if err != nil {
+						result.Map = [][]string{{"0"}}
+					}
+				} else {
+					result.Map = [][]string{{"0"}}
+				}
+			}
+			respData, _ := json.Marshal(result.Map)
+			responseTopic := fmt.Sprintf("central_to_chunk_%s", strings.ReplaceAll(coord, ",", "_"))
+			responseMsg := "MAP_RESPONSE:" + string(respData)
+			log.Printf("Central server: Sending map response on topic %s", responseTopic)
+			err = kafkaProducer.SendMessage(responseTopic, responseMsg)
+			if err != nil {
+				log.Printf("Error sending map response: %v", err)
+			}
+			continue
+		}
+
+		// Attempt to parse the message as a user state update.
+		var userUpdate struct {
+			UserName string `json:"userName"`
+			Score    int    `json:"score"`
+			Status   string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(message), &userUpdate); err == nil {
+			collection := client.Database("game").Collection("users")
+			ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			filter := bson.M{"userName": userUpdate.UserName}
+			update := bson.M{
+				"$set": bson.M{
+					"score":     userUpdate.Score,
+					"status":    userUpdate.Status,
+					"updatedAt": time.Now(),
+				},
+				"$max": bson.M{"highScore": userUpdate.Score},
+			}
+			opts := options.Update().SetUpsert(true)
+			_, err := collection.UpdateOne(ctxC, filter, update, opts)
+			if err != nil {
+				log.Printf("Failed to update user %s: %v", userUpdate.UserName, err)
+			} else {
+				log.Printf("Upserted user %s with score %d and status %s", userUpdate.UserName, userUpdate.Score, userUpdate.Status)
+			}
+		}
 	}
 }
 
@@ -469,14 +659,7 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 	log.Printf("Chunk results from DB are %v", results)
 
 	if len(results) == 0 {
-		if len(clusterClients) == 0 {
-			log.Printf("No clusterclients currently - kubeconfigs are %v", kubeconfigs)
-			clusterClients, err = k8s.KubeClients(kubeconfigs)
-			if err != nil {
-				return "", err
-			}
-		}
-		url, err := k8s.NewChunkServer(ctx, clusterClients)
+		url, err := k8s.NewChunkServer(ctx, clusterClients, x, y)
 		if err != nil {
 			return "", err
 		}
@@ -492,20 +675,15 @@ func getChunk(ctx context.Context, x, y int) (string, error) {
 
 func addChunkToDB(ctx context.Context, x, y int, url string) error {
 	collection := client.Database("game").Collection("chunks")
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	// Add chunk to DB
 	chunk := Chunk{
 		X:   x,
 		Y:   y,
 		Url: url,
 	}
-	log.Printf("Writing this chunk to DB: %v", chunk)
-	_, err := collection.InsertOne(ctx, chunk)
-	if err != nil {
-		return err
-	}
-	return nil
+	_, err := collection.InsertOne(ctxC, chunk)
+	return err
 }
 
 func clearChunkServers(ctx context.Context) error {
@@ -561,7 +739,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Connect to MongoDB
+	// Connect to MongoDB.
 	var err error
 	client, err = connectToDB(ctx)
 	if err != nil {
@@ -569,57 +747,51 @@ func main() {
 	}
 	defer client.Disconnect(ctx)
 
-	// Create k8s clients for chunk clusters
-	kubeconfigs = strings.Split(kubeconfigPaths, ",")
+	// Create k8s clients for chunk clusters.
+	kubeconfigs := strings.Split(kubeconfigPaths, ",")
 	clusterClients, err = k8s.KubeClients(kubeconfigs)
 	if err != nil {
 		log.Fatalf("Error connecting to cluster clients: %v", err)
 	}
 	log.Println("Created clients for all clusters")
 
-	// Initialise chunk servers with coordinates
-	initialChunkServers(ctx)
-	log.Println("Initialised chunk servers")
-
-	// Kafka setup
+	// Kafka setup.
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
 	if kafkaBroker == "" {
 		kafkaBroker = "kafka:9092"
 	}
 
-	// Initialize Kafka Producer
+	// Initialize Kafka Producer.
 	kafkaProducer, err = kafka.NewProducer([]string{kafkaBroker})
 	if err != nil {
 		log.Fatalf("Failed to initialize Kafka producer: %v", err)
 	}
 
-	// Initialize Kafka Consumer
+	// Initialize Kafka Consumer.
 	kafkaConsumer, err = kafka.NewConsumer([]string{kafkaBroker}, "central-server-group")
 	if err != nil {
 		log.Fatalf("Failed to initialize Kafka consumer: %v", err)
 	}
 
-	// Start consuming messages from chunk servers
+	// Start consuming messages from chunk servers.
 	go consumeChunkMessages(ctx)
 
-	log.Println("Kafka setup")
+	// Start a goroutine to broadcast leaderboard, active, and left player sync messages every second.
+	go broadcastSync(ctx)
 
-	// Graceful shutdown handling
+	// Graceful shutdown handling.
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 		<-sigChan
 		log.Println("Shutting down Central Server...")
-
-		// Cleanup Kafka connections
 		kafkaProducer.Close()
 		kafkaConsumer.Close()
-
 		cancel()
 		os.Exit(0)
 	}()
 
-	// Start HTTP server
+	// Start HTTP server.
 	r := setupRouter()
 	r.Run(":8080")
 }

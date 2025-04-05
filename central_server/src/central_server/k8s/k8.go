@@ -1,18 +1,20 @@
 package k8s
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"log"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
+	"slices"
+
+	"cmp"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apimachinery/pkg/types" // added import for patch type
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/ptr"
@@ -20,6 +22,7 @@ import (
 	kruiseclientset "github.com/openkruise/kruise-api/client/clientset/versioned"
 )
 
+// ClusterClient represents a Kubernetes cluster client.
 type ClusterClient struct {
 	clientset    *kubernetes.Clientset
 	kruiseclient *kruiseclientset.Clientset
@@ -27,6 +30,7 @@ type ClusterClient struct {
 	currentCount int
 }
 
+// KubeClients creates ClusterClient instances for each provided kubeconfig.
 func KubeClients(kubeconfigs []string) ([]*ClusterClient, error) {
 	var clients []*ClusterClient
 	for _, kubeconfig := range kubeconfigs {
@@ -35,7 +39,8 @@ func KubeClients(kubeconfigs []string) ([]*ClusterClient, error) {
 			return nil, err
 		}
 		currentContext := rawConfig.CurrentContext
-		strings.ReplaceAll(currentContext, "kind-", "") // Clusters are named like "kind-chunk1", but for URL construction we just want "chunk1"
+		// Remove "kind-" prefix for URL construction if present.
+		currentContext = strings.ReplaceAll(currentContext, "kind-", "")
 
 		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
@@ -55,12 +60,12 @@ func KubeClients(kubeconfigs []string) ([]*ClusterClient, error) {
 			kruiseclient: kruiseclient,
 			clusterName:  currentContext,
 		}
-
 		clients = append(clients, newClient)
 	}
 	return clients, nil
 }
 
+// checkChunkCount returns the number of pods matching the "app=pacman-chunk" label.
 func checkChunkCount(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
 	pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=pacman-chunk",
@@ -111,8 +116,8 @@ func DeleteChunkServer(ctx context.Context, clients []*ClusterClient, x, y int, 
 	return nil
 }
 
-func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, error) {
-	// Get count of number of chunk servers in each cluster, setting the count to MaxInt if the cluster is unreachable.
+func NewChunkServer(ctx context.Context, clients []*ClusterClient, x, y int) (string, error) {
+	// Update each cluster client's count; if unreachable, set to MaxInt.
 	for _, client := range clients {
 		count, err := checkChunkCount(ctx, client.clientset)
 		if err != nil {
@@ -123,12 +128,12 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 		}
 	}
 
-	// Sort the clusters by the number of chunk servers they contain
+	// Sort clusters by currentCount (lowest first).
 	slices.SortFunc(clients, func(a, b *ClusterClient) int {
 		return cmp.Compare(a.currentCount, b.currentCount)
 	})
 
-	// If no clusters are reachable, return an error
+	// If the best cluster is unreachable, return an error.
 	if clients[0].currentCount == math.MaxInt {
 		return "", fmt.Errorf("No clusters are reachable")
 	}
@@ -141,9 +146,6 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	podList, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=pacman-chunk",
 	})
-	if err != nil {
-		return "", err
-	}
 	resourceVersion := podList.ResourceVersion
 
 	// Add another replica to the cluster
@@ -178,7 +180,7 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 		log.Printf("Nothing created, event type %v", event.Type)
 	}
 
-	// Retrieve the name of the new chunk server/replica
+	// List all pods for the StatefulSet.
 	pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=pacman-chunk",
 	})
@@ -186,26 +188,39 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient) (string, erro
 	slices.SortFunc(ps, func(a, b corev1.Pod) int {
 		return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
 	})
-	newestPod := ps[len(ps)-1]
 
-	return getChunkServerUrl(newestPod.Name, clients[0].clusterName), nil
+	// Retrieve container name dynamically (assumes first container is the target).
+	containerName := ps[len(ps)-1].Spec.Containers[0].Name
+
+	// Create a coordinate string (e.g., "100,200").
+	coordinate := fmt.Sprintf("%d,%d", x, y)
+
+	// Patch the pod to add/update an environment variable "CHUNK_COORDINATE".
+	patch := []byte(fmt.Sprintf(`{"spec": {"containers": [{"name": "%s", "env": [{"name": "CHUNK_COORDINATE", "value": "%s"}]}]}}`, containerName, coordinate))
+	_, err = clientset.CoreV1().Pods("default").Patch(ctx, ps[len(ps)-1].Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to patch pod with coordinate env: %w", err)
+	}
+
+	// Construct and return the chunk server URL.
+	return getChunkServerUrl(ps[len(ps)-1].Name, clients[0].clusterName), nil
 }
 
+// getChunkServerUrl constructs a URL for a chunk server pod using its name and cluster name.
 func getChunkServerUrl(podName, clusterName string) string {
-	// Construct the url for the new pod - clustername.clairegregg.com/?id=chunkservernumber
-	// Pods are named like pacman-chunk-1
+	// Example: If podName is "pacman-chunk-1", split and take the last part as the server number.
 	splitPodName := strings.Split(podName, "-")
 	podNum := splitPodName[len(splitPodName)-1]
 	return fmt.Sprintf("%s.clairegregg.com/?id=%s", strings.ReplaceAll(clusterName, "kind-", ""), podNum)
 }
 
+// GetCurrentChunkServerUrls returns the URLs of all chunk server pods across clusters.
 func GetCurrentChunkServerUrls(ctx context.Context, clients []*ClusterClient) ([]string, error) {
 	var urls []string
 
-	// Search all clusters
+	// Iterate over all clusters.
 	for _, client := range clients {
 		clientset := client.clientset
-		// Retrieve all pods
 		pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 			LabelSelector: "app=pacman-chunk",
 		})
