@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -468,80 +469,380 @@ func canMoveToWithRadius(x, y float64, m [][]string, tileSize, radius int) bool 
 func chooseNewGhostDirection(ghost playerstate.GhostState, m [][]string, tileSize int) playerstate.Velocity {
 	const ghostRadius = 15
 	directions := []playerstate.Velocity{
+		{X: 6, Y: 0},  // right
+		{X: -6, Y: 0}, // left
+		{X: 0, Y: 6},  // down
+		{X: 0, Y: -6}, // up
+	}
+
+	var mapIndex int
+	_, err := fmt.Sscanf(ghost.ID, "map%d_", &mapIndex)
+	if err != nil {
+		return randomGhostDirection(ghost, m, tileSize, ghostRadius, directions)
+	}
+
+	if strings.HasSuffix(ghost.ID, "_ghost_0") {
+		return directChaseGhostDirection(ghost, m, tileSize, ghostRadius, directions, mapIndex)
+	}
+
+	if strings.HasSuffix(ghost.ID, "_ghost_1") {
+		return predictiveChaseGhostDirection(ghost, m, tileSize, ghostRadius, directions, mapIndex)
+	}
+
+	return randomGhostDirection(ghost, m, tileSize, ghostRadius, directions)
+}
+
+// Existing direct chase logic moved to a separate function
+func directChaseGhostDirection(ghost playerstate.GhostState, m [][]string, tileSize, ghostRadius int, directions []playerstate.Velocity, mapIndex int) playerstate.Velocity {
+	players := playerstate.GetPlayers()
+	var closestPlayer playerstate.PlayerState
+	shortestDistance := math.MaxFloat64
+
+	_, err := fmt.Sscanf(ghost.ID, "map%d_", &mapIndex)
+	if err != nil {
+		return randomGhostDirection(ghost, m, tileSize, ghostRadius, directions)
+	}
+
+	// Find closest player on this ghost's map
+	for _, player := range players {
+		if player.Location.X*4+player.Location.Y == mapIndex {
+			distance := math.Hypot(
+				ghost.Position.X-player.Position.X,
+				ghost.Position.Y-player.Position.Y,
+			)
+
+			if distance < shortestDistance {
+				shortestDistance = distance
+				closestPlayer = player
+			}
+		}
+	}
+
+	if shortestDistance < math.MaxFloat64 {
+		var validDirections []playerstate.Velocity
+
+		for _, d := range directions {
+			if canMoveToWithRadius(ghost.Position.X+d.X, ghost.Position.Y+d.Y, m, tileSize, ghostRadius) {
+				validDirections = append(validDirections, d)
+			}
+		}
+
+		if len(validDirections) == 0 {
+			return playerstate.Velocity{X: 0, Y: 0}
+		}
+
+		ghostCellX := int(ghost.Position.X) / tileSize
+		ghostCellY := int(ghost.Position.Y) / tileSize
+
+		playerCellX := int(closestPlayer.Position.X) / tileSize
+		playerCellY := int(closestPlayer.Position.Y) / tileSize
+
+		horizontalDist := playerCellX - ghostCellX
+		verticalDist := playerCellY - ghostCellY
+
+		var preferredDirections []playerstate.Velocity
+
+		if math.Abs(float64(horizontalDist)) > math.Abs(float64(verticalDist)) {
+			if horizontalDist > 0 {
+				for _, d := range validDirections {
+					if d.X > 0 {
+						preferredDirections = append(preferredDirections, d)
+					}
+				}
+			} else if horizontalDist < 0 {
+				for _, d := range validDirections {
+					if d.X < 0 {
+						preferredDirections = append(preferredDirections, d)
+					}
+				}
+			}
+
+			if len(preferredDirections) == 0 {
+				if verticalDist > 0 {
+					for _, d := range validDirections {
+						if d.Y > 0 {
+							preferredDirections = append(preferredDirections, d)
+						}
+					}
+				} else if verticalDist < 0 {
+					for _, d := range validDirections {
+						if d.Y < 0 {
+							preferredDirections = append(preferredDirections, d)
+						}
+					}
+				}
+			}
+		} else {
+			if verticalDist > 0 {
+				for _, d := range validDirections {
+					if d.Y > 0 {
+						preferredDirections = append(preferredDirections, d)
+					}
+				}
+			} else if verticalDist < 0 {
+				for _, d := range validDirections {
+					if d.Y < 0 {
+						preferredDirections = append(preferredDirections, d)
+					}
+				}
+			}
+
+			if len(preferredDirections) == 0 {
+				if horizontalDist > 0 {
+					for _, d := range validDirections {
+						if d.X > 0 {
+							preferredDirections = append(preferredDirections, d)
+						}
+					}
+				} else if horizontalDist < 0 {
+					for _, d := range validDirections {
+						if d.X < 0 {
+							preferredDirections = append(preferredDirections, d)
+						}
+					}
+				}
+			}
+		}
+
+		if len(preferredDirections) > 0 {
+			if ghost.Velocity.X != 0 || ghost.Velocity.Y != 0 {
+				reverse := playerstate.Velocity{X: -ghost.Velocity.X, Y: -ghost.Velocity.Y}
+
+				var nonReversingDirections []playerstate.Velocity
+				for _, d := range preferredDirections {
+					if d.X != reverse.X || d.Y != reverse.Y {
+						nonReversingDirections = append(nonReversingDirections, d)
+					}
+				}
+
+				if len(nonReversingDirections) > 0 {
+					idx := time.Now().UnixNano() % int64(len(nonReversingDirections))
+					return nonReversingDirections[idx]
+				}
+			}
+
+			idx := time.Now().UnixNano() % int64(len(preferredDirections))
+			return preferredDirections[idx]
+		}
+
+		// If no preferred directions, use any valid direction
+		idx := time.Now().UnixNano() % int64(len(validDirections))
+		return validDirections[idx]
+	}
+	// If no player found, use random movement
+	return randomGhostDirection(ghost, m, tileSize, ghostRadius, directions)
+}
+
+// Implement the predictive chase algorithm for ghost_1
+func predictiveChaseGhostDirection(ghost playerstate.GhostState, m [][]string, tileSize, ghostRadius int, directions []playerstate.Velocity, mapIndex int) playerstate.Velocity {
+	players := playerstate.GetPlayers()
+	var targetPlayer playerstate.PlayerState
+	playerFound := false
+
+	// Find a player on this ghost's map
+	for _, player := range players {
+		if player.Location.X*4+player.Location.Y == mapIndex {
+			targetPlayer = player
+			playerFound = true
+			break
+		}
+	}
+
+	// If no player found, use random movement
+	if !playerFound {
+		return randomGhostDirection(ghost, m, tileSize, ghostRadius, directions)
+	}
+
+	const predictSteps = 8
+
+	predictedX := targetPlayer.Position.X + (targetPlayer.Velocity.X * predictSteps)
+	predictedY := targetPlayer.Position.Y + (targetPlayer.Velocity.Y * predictSteps)
+
+	var validDirections []playerstate.Velocity
+	for _, d := range directions {
+		if canMoveToWithRadius(ghost.Position.X+d.X, ghost.Position.Y+d.Y, m, tileSize, ghostRadius) {
+			validDirections = append(validDirections, d)
+		}
+	}
+
+	if len(validDirections) == 0 {
+		return playerstate.Velocity{X: 0, Y: 0}
+	}
+
+	if ghost.Velocity.X != 0 || ghost.Velocity.Y != 0 {
+		reverse := playerstate.Velocity{X: -ghost.Velocity.X, Y: -ghost.Velocity.Y}
+
+		var nonReversingDirections []playerstate.Velocity
+		for _, d := range validDirections {
+			if d.X != reverse.X || d.Y != reverse.Y {
+				nonReversingDirections = append(nonReversingDirections, d)
+			}
+		}
+
+		if len(nonReversingDirections) > 0 {
+			validDirections = nonReversingDirections
+		}
+	}
+
+	bestDirection := validDirections[0]
+	bestDistance := math.MaxFloat64
+
+	for _, dir := range validDirections {
+		nextX := ghost.Position.X + dir.X
+		nextY := ghost.Position.Y + dir.Y
+
+		distance := math.Hypot(nextX-predictedX, nextY-predictedY)
+
+		if distance < bestDistance {
+			bestDistance = distance
+			bestDirection = dir
+		}
+	}
+
+	return bestDirection
+}
+
+// Extract the original random movement logic to a separate function
+func randomGhostDirection(ghost playerstate.GhostState, m [][]string, tileSize, ghostRadius int, directions []playerstate.Velocity) playerstate.Velocity {
+	allDirections := []playerstate.Velocity{
+		{X: 6, Y: 0},  // right
+		{X: -6, Y: 0}, // left
+		{X: 0, Y: 6},  // down
+		{X: 0, Y: -6}, // up
+	}
+
+	reverse := playerstate.Velocity{X: -ghost.Velocity.X, Y: -ghost.Velocity.Y}
+
+	var validDirections []playerstate.Velocity
+	for _, d := range allDirections {
+		if d.X == reverse.X && d.Y == reverse.Y {
+			continue
+		}
+		if canMoveToWithRadius(ghost.Position.X+d.X, ghost.Position.Y+d.Y, m, tileSize, ghostRadius) {
+			validDirections = append(validDirections, d)
+		}
+	}
+
+	if len(validDirections) == 0 {
+		if ghost.Velocity.X != 0 || ghost.Velocity.Y != 0 {
+			if canMoveToWithRadius(ghost.Position.X+reverse.X, ghost.Position.Y+reverse.Y, m, tileSize, ghostRadius) {
+				return reverse
+			}
+		}
+		return playerstate.Velocity{X: 0, Y: 0}
+	}
+
+	idx := time.Now().UnixNano() % int64(len(validDirections))
+	chosenDirection := validDirections[idx]
+
+	return chosenDirection
+}
+
+// updateGhosts continuously updates each ghost's position and velocity.
+func updateGhosts() {
+	const tileSize = 40
+	const ghostRadius = 15
+	const centerThreshold = 2
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	directions := []playerstate.Velocity{
 		{X: 6, Y: 0},
 		{X: -6, Y: 0},
 		{X: 0, Y: 6},
 		{X: 0, Y: -6},
 	}
-	var candidates []playerstate.Velocity
-
-	if ghost.Velocity.X != 0 || ghost.Velocity.Y != 0 {
-		// Exclude the reverse of the current velocity.
-		reverse := playerstate.Velocity{X: -ghost.Velocity.X, Y: -ghost.Velocity.Y}
-		for _, d := range directions {
-			if d.X == reverse.X && d.Y == reverse.Y {
-				continue
-			}
-			if canMoveToWithRadius(ghost.Position.X+d.X, ghost.Position.Y+d.Y, m, tileSize, ghostRadius) {
-				candidates = append(candidates, d)
-			}
-		}
-	} else {
-		// If stationary, consider all directions.
-		for _, d := range directions {
-			if canMoveToWithRadius(ghost.Position.X+d.X, ghost.Position.Y+d.Y, m, tileSize, ghostRadius) {
-				candidates = append(candidates, d)
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
-		return playerstate.Velocity{X: 0, Y: 0}
-	}
-
-	idx := time.Now().UnixNano() % int64(len(candidates))
-	return candidates[idx]
-}
-
-// updateGhosts continuously updates each ghost's position and velocity.
-// It determines which map a ghost belongs to (based on its ID, which is in the format "map{index}_ghost_{i}")
-// and then either moves the ghost forward or chooses a new direction if the next move is blocked.
-// updateGhosts uses the new collision detection with the ghost's radius.
-func updateGhosts() {
-	const tileSize = 40
-	const ghostRadius = 15
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
 
 	for range ticker.C {
 		ghosts := playerstate.GetGhosts(chunkKey)
 		for id, ghost := range ghosts {
 			var mapIndex int
-			// Parse the map index from the ghost ID, expecting the format "map{index}_ghost_{i}"
 			_, err := fmt.Sscanf(id, "map%d_", &mapIndex)
 			if err != nil || mapIndex < 0 || mapIndex >= len(Maps) {
 				continue
 			}
 			m := Maps[mapIndex]
+
+			isChaser := strings.HasSuffix(id, "_ghost_0") || strings.HasSuffix(id, "_ghost_1")
+
 			nextX := ghost.Position.X + ghost.Velocity.X
 			nextY := ghost.Position.Y + ghost.Velocity.Y
 
-			// If the next move would result in a collision (or if the ghost is stationary), choose a new direction.
-			if !canMoveToWithRadius(nextX, nextY, m, tileSize, ghostRadius) || (ghost.Velocity.X == 0 && ghost.Velocity.Y == 0) {
+			if isChaser {
 				ghost.Velocity = chooseNewGhostDirection(ghost, m, tileSize)
+
+				nextX := ghost.Position.X + ghost.Velocity.X
+				nextY := ghost.Position.Y + ghost.Velocity.Y
+
+				if canMoveToWithRadius(nextX, nextY, m, tileSize, ghostRadius) {
+					ghost.Position.X = nextX
+					ghost.Position.Y = nextY
+
+					if ghost.Velocity.X != 0 && ghost.Velocity.Y == 0 {
+						cellY := math.Floor(ghost.Position.Y / float64(tileSize))
+						pathCenterY := (cellY * float64(tileSize)) + (float64(tileSize) / 2)
+
+						adjustment := (pathCenterY - ghost.Position.Y) * 0.2
+						if math.Abs(adjustment) > 0.5 {
+							ghost.Position.Y += adjustment
+						}
+					} else if ghost.Velocity.X == 0 && ghost.Velocity.Y != 0 {
+						cellX := math.Floor(ghost.Position.X / float64(tileSize))
+						pathCenterX := (cellX * float64(tileSize)) + (float64(tileSize) / 2)
+
+						adjustment := (pathCenterX - ghost.Position.X) * 0.2
+						if math.Abs(adjustment) > 0.5 {
+							ghost.Position.X += adjustment
+						}
+					}
+				} else {
+					ghost.Velocity = playerstate.Velocity{X: 0, Y: 0}
+				}
 			} else {
-				ghost.Position.X = nextX
-				ghost.Position.Y = nextY
+				if !canMoveToWithRadius(nextX, nextY, m, tileSize, ghostRadius) || (ghost.Velocity.X == 0 && ghost.Velocity.Y == 0) {
+					ghost.Velocity = chooseNewGhostDirection(ghost, m, tileSize)
+
+					nextX = ghost.Position.X + ghost.Velocity.X
+					nextY = ghost.Position.Y + ghost.Velocity.Y
+
+					if !canMoveToWithRadius(nextX, nextY, m, tileSize, ghostRadius) {
+						ghost.Velocity = playerstate.Velocity{X: 0, Y: 0}
+					}
+				} else {
+					ghost.Position.X = nextX
+					ghost.Position.Y = nextY
+
+					currentCellX := int(ghost.Position.X) / tileSize
+					currentCellY := int(ghost.Position.Y) / tileSize
+
+					tileCenterX := float64(currentCellX*tileSize + tileSize/2)
+					tileCenterY := float64(currentCellY*tileSize + tileSize/2)
+
+					distanceToCenter := math.Hypot(
+						ghost.Position.X-tileCenterX,
+						ghost.Position.Y-tileCenterY,
+					)
+
+					if distanceToCenter < centerThreshold {
+						if currentCellX >= 0 && currentCellY >= 0 &&
+							currentCellX < len(m[0]) && currentCellY < len(m) &&
+							m[currentCellY][currentCellX] == "0" {
+
+							ghost.Velocity = randomGhostDirection(ghost, m, tileSize, ghostRadius, directions)
+
+							ghost.Position.X = tileCenterX
+							ghost.Position.Y = tileCenterY
+						}
+					}
+				}
 			}
 			playerstate.UpdateGhostState(chunkKey, ghost)
 		}
 	}
 }
 func initializeGhostsForChunk(chunkKey string) {
-	// Assume maps are indexed from 0 to 11.
 	for mapIndex := 0; mapIndex < 12; mapIndex++ {
 		var ghostPositions []playerstate.Position
-		// For example, define specific positions for map index 0; use defaults for others.
 		switch mapIndex {
 		case 0:
 			ghostPositions = []playerstate.Position{
@@ -628,7 +929,6 @@ func initializeGhostsForChunk(chunkKey string) {
 				{X: 340, Y: 380},
 			}
 		default:
-			// Default spawn positions for other maps (adjust as needed)
 			ghostPositions = []playerstate.Position{
 				{X: 300, Y: 300},
 				{X: 360, Y: 300},
@@ -645,6 +945,174 @@ func initializeGhostsForChunk(chunkKey string) {
 			}
 			playerstate.UpdateGhostState(chunkKey, ghost)
 			log.Printf("Initialized ghost %s at position: %+v for map index %d", ghostID, pos, mapIndex)
+		}
+	}
+}
+
+func initializeDroppersForChunk(chunkKey string) {
+	for mapIndex := 0; mapIndex < 12; mapIndex++ {
+
+		var initialPos playerstate.Position
+
+		switch mapIndex {
+		case 0:
+			initialPos = playerstate.Position{X: 260, Y: 220}
+		case 1:
+			initialPos = playerstate.Position{X: 300, Y: 260}
+		case 2:
+			initialPos = playerstate.Position{X: 340, Y: 180}
+		case 3:
+			initialPos = playerstate.Position{X: 260, Y: 300}
+		case 4:
+			initialPos = playerstate.Position{X: 300, Y: 300}
+		case 5:
+			initialPos = playerstate.Position{X: 280, Y: 280}
+		case 6:
+			initialPos = playerstate.Position{X: 300, Y: 260}
+		case 7:
+			initialPos = playerstate.Position{X: 260, Y: 300}
+		case 8:
+			initialPos = playerstate.Position{X: 340, Y: 300}
+		case 9:
+			initialPos = playerstate.Position{X: 260, Y: 300}
+		case 10:
+			initialPos = playerstate.Position{X: 300, Y: 260}
+		case 11:
+			initialPos = playerstate.Position{X: 320, Y: 300}
+		default:
+			initialPos = playerstate.Position{X: 260, Y: 260}
+		}
+
+		dropperID := fmt.Sprintf("map%d_dropper_1", mapIndex)
+		ds := playerstate.DropperState{
+			ID:            dropperID,
+			Position:      initialPos,
+			LastPosition:  initialPos,
+			Velocity:      playerstate.Velocity{X: 0, Y: 0},
+			PelletCounter: 0,
+		}
+		playerstate.UpdateDropperState(ds)
+		log.Printf("Initialized dropper %s at position: %+v", dropperID, ds.Position)
+	}
+}
+
+func chooseNewDropperDirection(ds playerstate.DropperState, m [][]string, tileSize int) playerstate.Velocity {
+	const dropperRadius = 15
+	directions := []playerstate.Velocity{
+		{X: 6, Y: 0},
+		{X: -6, Y: 0},
+		{X: 0, Y: 6},
+		{X: 0, Y: -6},
+	}
+	var candidates []playerstate.Velocity
+	reverse := playerstate.Velocity{X: -ds.Velocity.X, Y: -ds.Velocity.Y}
+	for _, d := range directions {
+		if d.X == reverse.X && d.Y == reverse.Y {
+			continue
+		}
+		if canMoveToWithRadius(ds.Position.X+d.X, ds.Position.Y+d.Y, m, tileSize, dropperRadius) {
+			candidates = append(candidates, d)
+		}
+	}
+	if len(candidates) == 0 {
+		return playerstate.Velocity{X: 0, Y: 0}
+	}
+	idx := time.Now().UnixNano() % int64(len(candidates))
+	return candidates[idx]
+}
+
+func updateDroppers() {
+	const tileSize = 40
+	const dropperRadius = 15
+	const pelletPlacementInterval = 5
+	const centerThreshold = 5
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		droppers := playerstate.GetDroppers()
+
+		for _, ds := range droppers {
+
+			var mapIndex int
+			_, err := fmt.Sscanf(ds.ID, "map%d_", &mapIndex)
+			if err != nil {
+				continue
+			}
+			if mapIndex < 0 || mapIndex >= len(Maps) {
+				continue
+			}
+
+			m := Maps[mapIndex]
+			ds.LastPosition = ds.Position
+			nextX := ds.Position.X + ds.Velocity.X
+			nextY := ds.Position.Y + ds.Velocity.Y
+
+			if !canMoveToWithRadius(nextX, nextY, m, tileSize, dropperRadius) || (ds.Velocity.X == 0 && ds.Velocity.Y == 0) {
+				ds.Velocity = chooseNewDropperDirection(ds, m, tileSize)
+			} else {
+				ds.Position.X = nextX
+				ds.Position.Y = nextY
+
+				currentCellX := int(ds.Position.X) / tileSize
+				currentCellY := int(ds.Position.Y) / tileSize
+
+				tileCenterX := float64(currentCellX*tileSize + tileSize/2)
+				tileCenterY := float64(currentCellY*tileSize + tileSize/2)
+
+				distanceToCenter := math.Hypot(
+					ds.Position.X-tileCenterX,
+					ds.Position.Y-tileCenterY,
+				)
+
+				if distanceToCenter < centerThreshold {
+					if currentCellX >= 0 && currentCellY >= 0 &&
+						currentCellX < len(m[0]) && currentCellY < len(m) &&
+						m[currentCellY][currentCellX] == "0" {
+
+						ds.Velocity = chooseNewDropperDirection(ds, m, tileSize)
+
+						ds.Position.X = tileCenterX
+						ds.Position.Y = tileCenterY
+					}
+				}
+			}
+
+			ds.PelletCounter++
+
+			if ds.PelletCounter >= pelletPlacementInterval {
+				ds.PelletCounter = 0
+
+				cellX := int(ds.LastPosition.X) / tileSize
+				cellY := int(ds.LastPosition.Y) / tileSize
+
+				cellCenterX := float64(cellX*tileSize + tileSize/2)
+				cellCenterY := float64(cellY*tileSize + tileSize/2)
+
+				cellCenterXInt := int(cellCenterX)
+				cellCenterYInt := int(cellCenterY)
+
+				if cellX >= 0 && cellY >= 0 && cellX < len(m[0]) && cellY < len(m) && m[cellY][cellX] == "0" {
+					cellPelletID := fmt.Sprintf("%d-%d", cellCenterXInt, cellCenterYInt)
+
+					if playerstate.IsPelletEaten(cellPelletID, mapIndex) {
+						pelletID := fmt.Sprintf("pellet-%d-%d-%d", cellX, cellY, mapIndex)
+						restoredPellet := playerstate.RestoredPellet{
+							ID: pelletID,
+							Position: playerstate.Position{
+								X: cellCenterX,
+								Y: cellCenterY,
+							},
+							MapIndex: mapIndex,
+						}
+						playerstate.AddRestoredPellet(chunkKey, restoredPellet)
+						playerstate.UnmarkPellet(cellPelletID, mapIndex)
+					}
+				}
+			}
+
+			playerstate.UpdateDropperState(ds)
 		}
 	}
 }
@@ -716,8 +1184,12 @@ func main() {
 	// Launch ghost initialization and updater after the map is loaded.
 	initializeGhostsForChunk(chunkKey)
 
+	initializeDroppersForChunk(chunkKey)
+
 	// Launch ghost updaters for all maps concurrently.
 	go updateGhosts()
+
+	go updateDroppers()
 
 	// Start a ticker to broadcast game state to connected WebSocket clients.
 	go func() {

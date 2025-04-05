@@ -32,14 +32,14 @@ type MessageEnvelope struct {
 // BroadcastGameState sends the current combined game state (players and eaten pellet IDs)
 // to all connected clients.
 
-// TODO: not sure if the game state is reference or new object when returned 
+// TODO: not sure if the game state is reference or new object when returned
 func BroadcastGameState() {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	for conn := range clients {
 		gameState := playerstate.GetGameState()
 		var player = gameState[clients[conn]]
-		state := playerstate.GetCombinedGameStateJSON(player.Location.X,player.Location.Y)
+		state := playerstate.GetCombinedGameStateJSON(player.Location.X, player.Location.Y)
 		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := conn.WriteMessage(websocket.TextMessage, state); err != nil {
 			log.Printf("Broadcast write error: %v", err)
@@ -74,7 +74,7 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Send the initial game state to the new client.
-	if state := playerstate.GetCombinedGameStateJSON(1,1); state != nil {
+	if state := playerstate.GetCombinedGameStateJSON(1, 1); state != nil {
 		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := conn.WriteMessage(websocket.TextMessage, state); err != nil {
 			log.Printf("Error writing initial game state: %v", err)
@@ -114,8 +114,8 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 			var pelletUpdate struct {
 				PelletID string `json:"pelletId"`
 				// Optionally include PlayerID and Score if needed.
-				PlayerID string `json:"id"`
-				Score    int    `json:"score"`
+				PlayerID string               `json:"id"`
+				Score    int                  `json:"score"`
 				Location playerstate.Location `json:"location"`
 			}
 			if err := json.Unmarshal(envelope.Data, &pelletUpdate); err != nil {
@@ -123,8 +123,33 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			// Mark the pellet as eaten globally.
-			playerstate.RemovePellet(pelletUpdate.PelletID, pelletUpdate.Location.X,pelletUpdate.Location.Y)
+			playerstate.RemovePellet(pelletUpdate.PelletID, pelletUpdate.Location.X, pelletUpdate.Location.Y)
 			// Broadcast the updated game state immediately.
+			BroadcastGameState()
+		case "ghost_collision":
+			var collisionUpdate struct {
+				PlayerID string               `json:"id"`
+				Score    int                  `json:"score"`
+				Location playerstate.Location `json:"location"`
+			}
+			if err := json.Unmarshal(envelope.Data, &collisionUpdate); err != nil {
+				log.Printf("Error parsing ghost collision update: %v", err)
+				continue
+			}
+
+			// Update the player state with the new score after collision
+			ps := playerstate.PlayerState{
+				ID:       collisionUpdate.PlayerID,
+				Score:    collisionUpdate.Score,
+				Status:   "active",
+				Location: collisionUpdate.Location,
+			}
+			playerstate.UpdatePlayerState(ps)
+
+			// Log the collision event
+			log.Printf("Player %s was caught by a ghost! New score: %d", collisionUpdate.PlayerID, collisionUpdate.Score)
+
+			// Broadcast the updated game state immediately
 			BroadcastGameState()
 		default:
 			log.Printf("Unknown message type: %s", envelope.Type)
