@@ -748,12 +748,12 @@ func main() {
 	defer client.Disconnect(ctx)
 
 	// Create k8s clients for chunk clusters.
-	// kubeconfigs := strings.Split(kubeconfigPaths, ",")
-	// clusterClients, err = k8s.KubeClients(kubeconfigs)
-	// if err != nil {
-	// 	log.Fatalf("Error connecting to cluster clients: %v", err)
-	// }
-	// log.Println("Created clients for all clusters")
+	kubeconfigs := strings.Split(kubeconfigPaths, ",")
+	clusterClients, err = k8s.KubeClients(kubeconfigs)
+	if err != nil {
+		log.Fatalf("Error connecting to cluster clients: %v", err)
+	}
+	log.Println("Created clients for all clusters")
 
 	// Initialise chunk servers with coordinates
 	initialChunkServers(ctx)
