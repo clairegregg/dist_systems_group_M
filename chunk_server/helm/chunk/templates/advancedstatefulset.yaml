@@ -1,0 +1,27 @@
+apiVersion: apps.kruise.io/v1beta1
+kind: StatefulSet
+metadata:
+  name: pacman-chunk
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pacman-chunk
+  serviceName: "pacman-chunk"  # Each headless service will be accessible as something like pacman-chunk-0.pacman-bhunk
+  template:
+    metadata:
+      labels:
+        app: pacman-chunk
+    spec:
+      containers:
+        - name: pacman-chunk
+          image: {{ .Values.pacmanChunk.image }}
+          ports:
+            - containerPort: {{ .Values.pacmanChunk.port }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVER
+              value: {{ .Values.pacmanChunk.kafka }}
+            - name: CENTRAL_SERVER_URL
+              value: {{ .Values.pacmanChunk.centralServer }}
+            - name: CLUSTER_NUMBER
+              value: "{{ .Values.pacmanChunk.clusterNumber }}"
