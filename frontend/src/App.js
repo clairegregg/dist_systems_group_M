@@ -39,13 +39,85 @@ function App() {
   function saveLocalPlayer(player) {
     sessionStorage.setItem("localPlayer", JSON.stringify(player));
   }
-  
+
+  // --- Ghost Class ---
+  class Ghost {
+    constructor({ id, position, velocity }) {
+      this.id = id;
+      this.position = { ...position };
+      this.velocity = velocity;
+      this.radius = 15;
+      this.targetPosition = { ...position };
+    }
+    update() {
+      this.position.x += (this.targetPosition.x - this.position.x) * 0.3;
+      this.position.y += (this.targetPosition.y - this.position.y) * 0.3;
+      this.draw();
+    }
+    draw() {
+      const screenX = gridOffsetRef.current.x + this.position.x;
+      const screenY = gridOffsetRef.current.y + this.position.y;
+      const c = canvasRef.current.getContext("2d");
+      c.beginPath();
+      c.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
+      c.fillStyle = "red";
+      c.fill();
+      c.closePath();
+    }
+  }
+
+  class Dropper {
+    constructor({ id, position, velocity, location, lastPosition }) {
+      this.id = id;
+      this.position = { ...position };
+      this.velocity = velocity;
+      this.radius = 15;
+      this.targetPosition = { ...position };
+      this.lastPosition = lastPosition || { ...position };
+      this.location = location || this.calculateLocation();
+      this.pelletCounter = 0;
+    }
+    calculateLocation() {
+      const CELL_SIZE = 40;
+      const gridX = Math.floor((this.position.x) / CELL_SIZE);
+      const gridY = Math.floor((this.position.y) / CELL_SIZE);
+      return { x: gridX, y: gridY };
+    }
+    update() {
+      this.lastPosition = { ...this.position };
+      
+      this.position.x += (this.targetPosition.x - this.position.x) * 0.3;
+      this.position.y += (this.targetPosition.y - this.position.y) * 0.3;
+      
+      this.location = this.calculateLocation();
+      
+      this.draw();
+    }
+    draw() {
+      const screenX = gridOffsetRef.current.x + this.position.x;
+      const screenY = gridOffsetRef.current.y + this.position.y;
+      const c = canvasRef.current.getContext("2d");
+      
+      c.beginPath();
+      c.arc(screenX, screenY, this.radius, 0, Math.PI * 2);
+      c.fillStyle = "green";
+      c.fill();
+      c.closePath();
+      
+      c.beginPath();
+      c.arc(screenX, screenY, this.radius / 2, 0, Math.PI * 2);
+      c.fillStyle = "white";
+      c.fill();
+      c.closePath();
+    }
+  }
+
   useEffect(() => {
     // Do NOT clear sessionStorage on beforeunload; this allows the ID to persist through refresh.
     // Only the WebSocket connection will be closed on unload.
     
-    let mapX = 1
-    let mapY = 1
+    let mapX = 0
+    let mapY = 0
     const canvas = canvasRef.current;
     const scoreEl = scoreElRef.current;
     const scoreboardEl = scoreboardRef.current;
@@ -135,6 +207,8 @@ function App() {
 
     // --- Collections for game objects ---
     const remotePlayers = new Map();
+    const remoteGhosts = new Map(); 
+    const remoteDroppers = new Map();
     const pellets = [];
     const boundaries = [];
 
@@ -175,6 +249,7 @@ function App() {
         socket.send(JSON.stringify({ type: "disconnect", id: localPlayer.id }));
       }
     };
+
     // Process remote combined state messages.
     function processRemoteMessage(messageData) {
       try {
@@ -233,10 +308,154 @@ function App() {
             }
           });
         }
+        // Process ghost state.
+        if (data.ghosts) {
+          Object.entries(data.ghosts).forEach(([id, ghostData]) => {
+
+            if (!id.startsWith(`map${mapX * 4 + mapY}_`)) {
+              return;
+            }
+
+            const absPos = {
+              x: ghostData.position.x,
+              y: ghostData.position.y,
+            };
+            if (!remoteGhosts.has(id)) {
+              remoteGhosts.set(
+                id,
+                new Ghost({
+                  id,
+                  position: absPos,
+                  velocity: ghostData.velocity,
+                })
+              );
+              console.log(`Spawned ghost ${id} at position:`, absPos);
+            } else {
+              const ghost = remoteGhosts.get(id);
+              ghost.targetPosition = absPos;
+              ghost.velocity = ghostData.velocity;
+            }
+          });
+        }
+        if (data.restoredPellets) {
+          const activeMapIndex = mapX * 4 + mapY;
+          
+          Object.entries(data.restoredPellets).forEach(([pelletId, pelletData]) => {
+            if (pelletData.mapIndex !== activeMapIndex) {
+              return;
+            }
+            
+            const existingPelletIndex = pellets.findIndex(p => 
+              p.id === pelletId || 
+              (Math.abs(p.gamePos.x - pelletData.position.x) < 5 && 
+               Math.abs(p.gamePos.y - pelletData.position.y) < 5)
+            );
+            
+            if (existingPelletIndex === -1) {
+              const newPellet = new Pellet({
+                gamePos: {
+                  x: pelletData.position.x,
+                  y: pelletData.position.y,
+                },
+                id: pelletId
+              });
+              
+              pellets.push(newPellet);
+              console.log(`Added restored pellet at (${pelletData.position.x}, ${pelletData.position.y})`);
+            }
+          });
+        }
+        if (data.droppers) {
+          Object.entries(data.droppers).forEach(([id, dropperData]) => {
+            if (!id.startsWith(`map${mapX * 4 + mapY}_`)) {
+              return;
+            }
+            if (!remoteDroppers.has(id)) {
+              remoteDroppers.set(
+                id,
+                new Dropper({
+                  id,
+                  position: dropperData.position,
+                  velocity: dropperData.velocity,
+                  location: dropperData.location,
+                  lastPosition: dropperData.lastPosition || dropperData.position,
+                })
+              );
+              console.log(`Spawned dropper ${id} at position:`, dropperData.position);
+            } else {
+              const dropper = remoteDroppers.get(id);
+              dropper.lastPosition = { ...dropper.position };
+              dropper.targetPosition = { ...dropperData.position };
+              dropper.velocity = dropperData.velocity;
+              if (dropperData.location) {
+                dropper.location = dropperData.location;
+              }
+            }
+          });
+        }
       } catch (err) {
         console.error("Error processing remote message:", err, messageData);
       }
     }
+
+    function checkGhostPlayerCollision(ghost, player) {
+      const distance = Math.hypot(
+        ghost.position.x - player.gamePos.x,
+        ghost.position.y - player.gamePos.y
+      );
+      return distance < ghost.radius + player.radius;
+    }
+
+    // Function to find a random valid spawn position
+    function getRandomRespawnPosition() {
+      const currentMap = maps[mapX * 4 + mapY];
+      const validPositions = [];
+      
+      const rows = currentMap.length;
+      const cols = currentMap[0].length;
+      
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          if (currentMap[y][x] === "0") {
+            validPositions.push({
+              x: x * CELL_SIZE + CELL_SIZE / 2,
+              y: y * CELL_SIZE + CELL_SIZE / 2
+            });
+          }
+        }
+      }
+      
+      if (validPositions.length === 0) {
+        return { x: CELL_SIZE * 1.5, y: CELL_SIZE * 1.5 };
+      }
+      
+      const randomIndex = Math.floor(Math.random() * validPositions.length);
+      return validPositions[randomIndex];
+    }
+
+    function handleGhostCollision() {
+      const randomRespawnPosition = getRandomRespawnPosition();
+      
+      localPlayer.gamePos = randomRespawnPosition;
+            
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "ghost_collision",
+            data: {
+              id: localPlayer.id,
+              score: localPlayer.score,
+              position: localPlayer.gamePos,
+              location: {
+                X: mapX,
+                Y: mapY
+              },
+            },
+          })
+        );
+      }
+    }
+    
 
     socket.addEventListener("message", (event) => {
       if (!mapLoadedRef.current) {
@@ -292,6 +511,7 @@ function App() {
         //   return;
         // }
         // const map = await res.json();
+        const currentMap = maps[mapX * 4 + mapY];
         setLocalMap(maps[mapX*4+mapY]);
         const rows = maps[0].length;
         const cols = maps[0][0].length;
@@ -446,10 +666,10 @@ function App() {
 
       let vx = localPlayer.velocity.x;
       let vy = localPlayer.velocity.y;
-      if (keys.w.pressed) vy = -6;
-      if (keys.s.pressed) vy = 6;
-      if (keys.a.pressed) vx = -6;
-      if (keys.d.pressed) vx = 6;
+      if (keys.w.pressed) vy = -3;
+      if (keys.s.pressed) vy = 3;
+      if (keys.a.pressed) vx = -3;
+      if (keys.d.pressed) vx = 3;
 
       const newGamePos = {
         x: localPlayer.gamePos.x + vx,
@@ -531,6 +751,23 @@ function App() {
       remotePlayers.forEach((player) => {
         player.update(delta);
       });
+
+      remoteGhosts.forEach((ghost, id) => {
+        if (id.startsWith(`map${mapX * 4 + mapY}_`)) {
+          ghost.update();
+
+          if (checkGhostPlayerCollision(ghost, localPlayer)) {
+            console.log(`Collision detected between ${localPlayer.id} and ghost ${ghost.id}`);
+            handleGhostCollision();
+          }
+        }
+      });
+
+      remoteDroppers.forEach((dropper, id) => {
+        if (id.startsWith(`map${mapX * 4 + mapY}_`)) {
+          dropper.update();
+        }
+      });    
     }
 
     Promise.all([
