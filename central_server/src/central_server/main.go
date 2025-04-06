@@ -755,6 +755,10 @@ func main() {
 	}
 	log.Println("Created clients for all clusters")
 
+	// Initialise chunk servers with coordinates
+	initialChunkServers(ctx)
+	log.Println("Initialised chunk servers")
+
 	// Kafka setup.
 	kafkaBroker := os.Getenv("KAFKA_BOOTSTRAP_SERVER")
 	if kafkaBroker == "" {
