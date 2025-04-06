@@ -251,9 +251,9 @@ func setupRouter() *gin.Engine {
 		c.JSON(http.StatusOK, leaderboard)
 	})
 
-	// GET endpoint to find a chunk server at specific chunk coordinates
+	// POST endpoint to find a chunk server at specific chunk coordinates
 	// May require bringing up a new chunk server
-	r.GET("/get-chunk-server", func(c *gin.Context) {
+	r.POST("/get-chunk-server", func(c *gin.Context) {
 		var req NewChunkServerRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			fmt.Print(err.Error())
@@ -748,12 +748,12 @@ func main() {
 	defer client.Disconnect(ctx)
 
 	// Create k8s clients for chunk clusters.
-	kubeconfigs := strings.Split(kubeconfigPaths, ",")
-	clusterClients, err = k8s.KubeClients(kubeconfigs)
-	if err != nil {
-		log.Fatalf("Error connecting to cluster clients: %v", err)
-	}
-	log.Println("Created clients for all clusters")
+	// kubeconfigs := strings.Split(kubeconfigPaths, ",")
+	// clusterClients, err = k8s.KubeClients(kubeconfigs)
+	// if err != nil {
+	// 	log.Fatalf("Error connecting to cluster clients: %v", err)
+	// }
+	// log.Println("Created clients for all clusters")
 
 	// Initialise chunk servers with coordinates
 	initialChunkServers(ctx)
