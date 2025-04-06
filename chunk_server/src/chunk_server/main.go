@@ -267,7 +267,7 @@ func main() {
 	log.Print("Initialized kafka producer")
 
 	// Create the Kafka topic for this chunk server.
-	err = kafkaProducer.CreateTopic(chunkTopic, kafkaBroker)
+	err = kafkaProducer.CreateTopic(kafkaBroker, chunkTopic)
 	if err != nil {
 		log.Fatalf("Failed to create Kafka topic: %v", err)
 	}
