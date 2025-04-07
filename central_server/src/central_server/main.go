@@ -180,10 +180,32 @@ func setupRouter() *gin.Engine {
 
 		db[req.UserName] = req.PacmanBody
 
+		// Get random chunk to connect to
+		collection = client.Database("game").Collection("chunks")
+		ctxC, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		cursor, err := collection.Find(ctxC, bson.D{})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to find chunk to assign to, error: %w", err)})
+			return
+		}
+		var results []Chunk
+		if err = cursor.All(ctxC, &results); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to find chunk to assign to, error: %w", err)})
+			return
+		}
+		defer cursor.Close(ctx)
+
+		if len(results) == 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("No chunks available")})
+			return
+		}
+
 		// Build the response object
 		resp := CreateUserResponse{
 			UserName:           req.UserName,
-			ChunkServerAddress: "http://chunkserver.example.com", // Placeholder address
+			ChunkServerAddress: results[0].Url, 
 		}
 		resp.SpawnCoordinates.X = 100.0
 		resp.SpawnCoordinates.Y = 200.0
