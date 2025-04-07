@@ -151,6 +151,14 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Broadcast the updated game state immediately
 			BroadcastGameState()
+		case "player_leaving":
+			var ps playerstate.PlayerState
+			if err := json.Unmarshal(envelope.Data, &ps); err != nil {
+				log.Printf("Error parsing player state: %v", err)
+				continue
+			}
+			playerstate.RemovePlayerState(ps.ID)
+			BroadcastGameState()
 		default:
 			log.Printf("Unknown message type: %s", envelope.Type)
 		}
