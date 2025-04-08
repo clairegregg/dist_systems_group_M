@@ -279,7 +279,7 @@ function App() {
     const localPlayerColor =
       initialPlayer?.color || `hsl(${Math.random() * 360}, 70%, 60%)`;
     const localPlayer = new Player({
-      id: username,
+      id: localPlayerId,
       gamePos: { ...localPlayerGamePos },
       velocity: { x: 0, y: 0 },
       color: localPlayerColor,
