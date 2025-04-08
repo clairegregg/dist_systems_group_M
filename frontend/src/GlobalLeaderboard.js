@@ -4,8 +4,8 @@ import React, { useEffect, useState } from "react";
 function GlobalLeaderboard({url, ID}) {
   const [activePlayers, setActivePlayers] = useState([]);
   const [leftPlayers, setLeftPlayers] = useState([]);
-  const CENTRAL_URL_ACTIVE = `${url}/scores/active${ID}` // current chuck URL
-  const CENTRAL_URL_LEFT = `${url}/scores/left${ID}`
+  const CENTRAL_URL_ACTIVE = `${url}/scores/active?${ID}` // current chuck URL
+  const CENTRAL_URL_LEFT = `${url}/scores/left?${ID}`
   useEffect(() => {
     async function fetchData() {
       try {
