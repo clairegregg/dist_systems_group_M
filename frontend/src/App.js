@@ -254,13 +254,32 @@ function App() {
     const pellets = [];
     const boundaries = [];
 
+    let usernameInputted = false
+    let username = "test"
+    document.querySelector('#userForm').addEventListener('submit', (event) => {
+      event.preventDefault()
+      username = document.querySelector('#usernameInput').value
+
+      async function sendUsername () {
+        const rawData = await fetch("http://server.clairegregg.com:6441/users", {method:"POST",
+        body: JSON.stringify({userName:username})
+        })
+        const data = await rawData.json()
+        console.log(data)
+      }
+      sendUsername()
+
+      document.querySelector('#userForm').style.display = 'none'
+      usernameInputted = true
+    })
+
     // Local player.
     const localPlayerGamePos = { x: CELL_SIZE * 1.5, y: CELL_SIZE * 1.5 };
     const localPlayerId = localPlayerIdRef.current;
     const localPlayerColor =
       initialPlayer?.color || `hsl(${Math.random() * 360}, 70%, 60%)`;
     const localPlayer = new Player({
-      id: localPlayerId,
+      id: username,
       gamePos: { ...localPlayerGamePos },
       velocity: { x: 0, y: 0 },
       color: localPlayerColor,
@@ -762,6 +781,7 @@ function App() {
 
     function animate() {
       animationFrameId = requestAnimationFrame(animate);
+      if (usernameInputted) {
       if (localPlayer.gamePos.x < 0){
         localPlayer.gamePos.x = 650
         swapMap(mapX+1,mapY)
@@ -891,7 +911,8 @@ function App() {
         if (id.startsWith(`map${mapX * 4 + mapY}_`)) {
           dropper.update();
         }
-      });    
+      });
+    } 
     }
 
     Promise.all([
