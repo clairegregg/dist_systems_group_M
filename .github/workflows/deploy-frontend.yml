@@ -40,6 +40,6 @@ jobs:
                 password: ${{ secrets.SERVER_SSH_PASSWORD }}
                 port: 22
                 script: |
-                    docker ps -q --filter "name=frontend" | grep -q . && docker stop frontend && docker rm frontend || echo "No running container"
+                    docker ps -q --filter "name=frontend" | grep -q . && docker stop frontend && docker rm frontend && docker image rm ${{ vars.DOCKERHUB_USERNAME }}/pacman-frontend || echo "No running container"
                     docker run -d --name frontend -p 3000:3000 ${{ vars.DOCKERHUB_USERNAME }}/pacman-frontend:latest
 
