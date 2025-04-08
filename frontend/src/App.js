@@ -548,6 +548,7 @@ function App() {
       }
       if (localPlayer.lives <= 0){
         socket.close()
+        sessionStorage.clear()
       }
 
     }
@@ -861,8 +862,8 @@ function App() {
       boundaries.forEach((b) => b.draw());
       pellets.forEach((p) => p.draw());
       localPlayer.draw();
-      console.log("local player")
-      console.log(localPlayer)
+      // console.log("local player")
+      // console.log(localPlayer)
 
       const currentTime = Date.now();
       for (const [id, player] of remotePlayers) {
