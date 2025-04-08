@@ -1,27 +1,34 @@
 // GlobalLeaderboard.js
 import React, { useEffect, useState } from "react";
 
-function GlobalLeaderboard() {
+function GlobalLeaderboard({url, ID}) {
   const [activePlayers, setActivePlayers] = useState([]);
   const [leftPlayers, setLeftPlayers] = useState([]);
-  const CENTRAL_URL_ACTIVE = "http://localhost:8082/scores/active" // current chuck URL
-  const CENTRAL_URL_LEFT = "http://localhost:8082/scores/left"
+  const CENTRAL_URL_ACTIVE = `${url}/scores/active?${ID}` // current chuck URL
+  const CENTRAL_URL_LEFT = `${url}/scores/left?${ID}`
   useEffect(() => {
     async function fetchData() {
       try {
         // Fetch active players scores.
         const activeRes = await fetch(CENTRAL_URL_ACTIVE);
-        const activeData = await activeRes.json();
+        let activeData = await activeRes.json();
         // Sort active players by score descending.
-        activeData.sort((a, b) => b.score - a.score);
-
+        if (activeData){
+          activeData.sort((a, b) => b.score - a.score);
+        }
+        else{
+          activeData = []
+        }
         // Fetch left players scores.
         const leftRes = await fetch(CENTRAL_URL_LEFT);
-        const leftData = await leftRes.json();
+        let leftData = await leftRes.json();
 
         // Sort left players by score descending.
-        leftData.sort((a, b) => b.score - a.score);
-
+        if(leftData){
+          leftData.sort((a, b) => b.score - a.score);
+        }else{
+          leftData = []
+        }
         setActivePlayers(activeData);
         setLeftPlayers(leftData);
       } catch (error) {

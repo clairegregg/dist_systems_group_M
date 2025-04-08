@@ -4,9 +4,11 @@ import map from "./maps"
 
 
 function App() {
-  const WS_URL = "ws://localhost:8082/ws";
-  const CHUCK_URL = "http://localhost:8082/getMap"
-  const CENTRAL_URL = "http://localhost:8080/"
+  let WS_URL = "ws://chunk1.clairegregg.com/ws?id=1";
+  const CENTRAL_URL = "http://server.clairegregg.com:6441/get-chunk-server"
+  let CHUNK_URL = "ws://chunk1.clairegregg.com/ws?id=1";
+  let chunkX = 1
+  let chunkY = 1
   // Refs for canvas and scoreboard elements.
   const canvasRef = useRef(null);
   const scoreElRef = useRef(null);
@@ -39,7 +41,47 @@ function App() {
   function saveLocalPlayer(player) {
     sessionStorage.setItem("localPlayer", JSON.stringify(player));
   }
+  
+  const [surroundingURLs, setSurroundingURLs] = useState([])
 
+  useEffect(()=>{
+    async function getSurroundingURLs () {
+      let backX = chunkX-1
+      if (backX === 0){
+        backX = backX - 1
+      }
+      let frontX = chunkX+1
+      if (frontX === 0){
+        frontX = frontX + 1
+      }
+      let backY = chunkY-1
+      if (backY === 0){
+        backY = backX - 1
+      }
+      let frontY = chunkY+1
+      if (frontY === 0){
+        frontY = frontY + 1
+      }
+      const locations = [[backX,chunkY], [frontX,chunkY], [chunkX,backY],[chunkX,frontY]]
+      const urls =[]
+      for (const loc in locations){ 
+        const rawData = await fetch("http://server.clairegregg.com:6441/get-chunk-server", {method:"POST",
+          headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ChunkCoordinates:{x:locations[loc][0],y:locations[loc][1]}})
+        })
+        const data = await rawData.json()
+        let address = data.chunkServerAddress.split("/")
+        urls.push(`ws://${address[0]}/ws${address[1]}`)
+      }
+      setSurroundingURLs(urls)
+      
+    }
+    getSurroundingURLs();
+
+  },[chunkX,chunkY])
   // --- Ghost Class ---
   class Ghost {
     constructor({ id, position, velocity }) {
@@ -158,6 +200,7 @@ function App() {
         this.lastUpdate = Date.now();
         this.X = X;
         this.Y = Y;
+        this.lives = 3
       }
       update(delta) {
         if (!this.isLocal) {
@@ -172,7 +215,6 @@ function App() {
             this.gamePos.y += dy * delta * smoothingFactor;
           }
         }
-        console.log(`Player: ${this.id}, X:${this.X}, Y:${this.Y}`)
         if(this.X === mapX && this.Y === mapY){
           this.draw();
         }
@@ -243,7 +285,52 @@ function App() {
     };
 
     // --- WebSocket Setup ---
-    const socket = new WebSocket(WS_URL);
+    const getNewSocket = async (url) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "player_leaving",
+            data: {
+              id: localPlayer.id,
+              color: localPlayer.color,
+              score: localPlayer.score,
+              position: { ...localPlayer.gamePos },
+              velocity: localPlayer.velocity,
+              location:{
+                X:mapX,
+                Y:mapY
+              },
+            },
+          })
+        );
+      }
+      socket.close()
+      try{
+        socket = new WebSocket(url)
+        socket.addEventListener("message", (event) => {
+          if (!mapLoadedRef.current) {
+            remoteMessageQueue.push(event.data);
+          } else {
+            processRemoteMessage(event.data);
+          }
+        });
+        CHUNK_URL = url
+    }
+      catch{
+        socket = new WebSocket(CHUNK_URL)
+        socket.addEventListener("message", (event) => {
+          if (!mapLoadedRef.current) {
+            remoteMessageQueue.push(event.data);
+          } else {
+            processRemoteMessage(event.data);
+          }
+        });
+      }
+    }
+
+
+
+    let socket = new WebSocket(WS_URL);
     const handleBeforeUnload = () => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "disconnect", id: localPlayer.id }));
@@ -262,7 +349,6 @@ function App() {
               return;
             }
             const gamePos = { ...playerData.position };
-            console.log(playerData)
             if (!remotePlayers.has(id)) {
               remotePlayers.set(
                 id,
@@ -295,6 +381,11 @@ function App() {
             }
           });
           updateScoreboard();
+          Object.entries(remotePlayers).forEach(([id,playerData]) => {
+            if (!data.players.has(id)){
+              remotePlayers.delete(id)
+            }
+          })
         }
     
         // Process the eatenPellets array (IDs of pellets to delete).
@@ -437,6 +528,7 @@ function App() {
       const randomRespawnPosition = getRandomRespawnPosition();
       
       localPlayer.gamePos = randomRespawnPosition;
+      localPlayer.lives -= 1
             
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(
@@ -454,6 +546,10 @@ function App() {
           })
         );
       }
+      if (localPlayer.lives <= 0){
+        socket.close()
+      }
+
     }
     
 
@@ -581,10 +677,34 @@ function App() {
     async function swapMap(newX,newY) {
       boundaries.length = 0;
       pellets.length = 0;
-      localPlayer.X = newX;
-      localPlayer.Y = newY;
-      mapX = newX;
-      mapY = newY;
+      let chunkSwitch = null
+      if(newX > 2){
+        localPlayer.X = 0
+        chunkSwitch = 0
+      }
+      else if (newX < 0){
+        localPlayer.X = 2
+        chunkSwitch = 1
+      }
+      else {
+        localPlayer.X = newX;
+      }
+      if(newY > 3){
+        localPlayer.Y = 0
+        chunkSwitch = 2
+      }
+      else if (newY < 0 ){
+        localPlayer.Y = 3
+        chunkSwitch = 3
+      }
+      else {
+        localPlayer.Y = newY;
+      }
+      mapX = localPlayer.X;
+      mapY = localPlayer.Y;
+      if(chunkSwitch){
+        await getNewSocket(surroundingURLs[chunkSwitch])
+      }
       await loadMap();
       console.log("Swapped Map")
     }
@@ -741,6 +861,8 @@ function App() {
       boundaries.forEach((b) => b.draw());
       pellets.forEach((p) => p.draw());
       localPlayer.draw();
+      console.log("local player")
+      console.log(localPlayer)
 
       const currentTime = Date.now();
       for (const [id, player] of remotePlayers) {
@@ -749,6 +871,8 @@ function App() {
         }
       }
       remotePlayers.forEach((player) => {
+        console.log("remote player")
+        console.log(player)
         player.update(delta);
       });
 
@@ -796,6 +920,10 @@ function App() {
     };
   }, []);
 
+  const output = WS_URL.split("/")
+  const chunkID = output[3].split("?")[1]
+  const newURL = `http://${output[2]}`
+
   return (
     <div>
       <div
@@ -830,7 +958,7 @@ function App() {
       <button onClick={() => window.reloadMap && window.reloadMap()}>
         Reload Map
       </button>
-      <GlobalLeaderboard />
+      <GlobalLeaderboard url={newURL} ID={chunkID}/>
     </div>
   );
 }

@@ -342,15 +342,6 @@ func setupRouter() *gin.Engine {
 		websocket.WSHandler(c.Writer, c.Request)
 	})
 
-	// Expose the locally stored map.
-	r.GET("/getMap", func(c *gin.Context) {
-		if localMap == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "map not loaded"})
-		} else {
-			c.JSON(http.StatusOK, localMap)
-		}
-	})
-
 	// New endpoints to expose sync data.
 
 	r.GET("/leaderboard", func(c *gin.Context) {
@@ -383,7 +374,7 @@ func waitForCentralServer(centralURL string) {
 func registerChunkID() {
 	centralURL := os.Getenv("CENTRAL_SERVER_URL")
 	if centralURL == "" {
-		centralURL = "http://central_server:8080" // adjust as needed
+		centralURL = "http://server.clairegregg.com:6441" // adjust as needed
 	}
 	waitForCentralServer(centralURL)
 	registrationMsg := fmt.Sprintf("REGISTER:%s", chunkID)
@@ -399,7 +390,7 @@ func registerChunkID() {
 func requestMap() {
 	centralURL := os.Getenv("CENTRAL_SERVER_URL")
 	if centralURL == "" {
-		centralURL = "http://central_server:8080"
+		centralURL = "http://server.clairegregg.com:6441"
 	}
 	waitForCentralServer(centralURL)
 	mapConsumer, err := kafka.NewConsumer(kafkaBroker, chunkID+"_map")
