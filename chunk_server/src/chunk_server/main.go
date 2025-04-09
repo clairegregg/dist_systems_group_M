@@ -1018,7 +1018,7 @@ func initializeDroppersForChunk(chunkKey string) {
 		case 4:
 			initialPos = playerstate.Position{X: 300, Y: 300}
 		case 5:
-			initialPos = playerstate.Position{X: 280, Y: 280}
+			initialPos = playerstate.Position{X: 260, Y: 260}
 		case 6:
 			initialPos = playerstate.Position{X: 300, Y: 260}
 		case 7:
@@ -1030,7 +1030,7 @@ func initializeDroppersForChunk(chunkKey string) {
 		case 10:
 			initialPos = playerstate.Position{X: 300, Y: 260}
 		case 11:
-			initialPos = playerstate.Position{X: 320, Y: 300}
+			initialPos = playerstate.Position{X: 340, Y: 300}
 		default:
 			initialPos = playerstate.Position{X: 260, Y: 260}
 		}
@@ -1076,7 +1076,7 @@ func chooseNewDropperDirection(ds playerstate.DropperState, m [][]string, tileSi
 func updateDroppers() {
 	const tileSize = 40
 	const dropperRadius = 15
-	const pelletPlacementInterval = 5
+	const pelletPlacementInterval = 1
 	const centerThreshold = 5
 
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -1184,16 +1184,7 @@ func main() {
 	log.Printf("Chunk ID: %s", chunkID)
 	log.Printf("Chunk topic: %s", chunkTopic)
 
-	// Read the raw coordinate from environment variable and remove any double quotes.
-	rawCoord := os.Getenv("CHUNK_COORDINATE")
-	if rawCoord == "" {
-		log.Println("CHUNK_COORDINATE not found in env; using default coordinate '0,0'")
-		rawCoord = "0,0"
-	} else {
-		rawCoord = strings.ReplaceAll(rawCoord, "\"", "")
-	}
-	// For map operations, also set a chunkKey
-	chunkKey = strings.ReplaceAll(rawCoord, ",", "-")
+	chunkKey = "0-0"
 
 	playerstate.CurrentChunkKey = chunkKey
 
