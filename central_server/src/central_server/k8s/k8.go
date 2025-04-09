@@ -14,7 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/apimachinery/pkg/types" // added import for patch type
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/ptr"
@@ -189,18 +188,18 @@ func NewChunkServer(ctx context.Context, clients []*ClusterClient, x, y int) (st
 		return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
 	})
 
-	// Retrieve container name dynamically (assumes first container is the target).
-	containerName := ps[len(ps)-1].Spec.Containers[0].Name
+	// // Retrieve container name dynamically (assumes first container is the target).
+	// containerName := ps[len(ps)-1].Spec.Containers[0].Name
 
-	// Create a coordinate string (e.g., "100,200").
-	coordinate := fmt.Sprintf("%d,%d", x, y)
+	// // Create a coordinate string (e.g., "100,200").
+	// coordinate := fmt.Sprintf("%d,%d", x, y)
 
-	// Patch the pod to add/update an environment variable "CHUNK_COORDINATE".
-	patch := []byte(fmt.Sprintf(`{"spec": {"containers": [{"name": "%s", "env": [{"name": "CHUNK_COORDINATE", "value": "%s"}]}]}}`, containerName, coordinate))
-	_, err = clientset.CoreV1().Pods("default").Patch(ctx, ps[len(ps)-1].Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
-	if err != nil {
-		return "", fmt.Errorf("failed to patch pod with coordinate env: %w", err)
-	}
+	// // Patch the pod to add/update an environment variable "CHUNK_COORDINATE".
+	// patch := []byte(fmt.Sprintf(`{"spec": {"containers": [{"name": "%s", "env": [{"name": "CHUNK_COORDINATE", "value": "%s"}]}]}}`, containerName, coordinate))
+	// _, err = clientset.CoreV1().Pods("default").Patch(ctx, ps[len(ps)-1].Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	// if err != nil {
+	// 	return "", fmt.Errorf("failed to patch pod with coordinate env: %w", err)
+	// }
 
 	// Construct and return the chunk server URL.
 	return getChunkServerUrl(ps[len(ps)-1].Name, clients[0].clusterName), nil

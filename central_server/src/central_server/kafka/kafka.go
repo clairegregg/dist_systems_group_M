@@ -38,11 +38,11 @@ func (p *Producer) SendMessage(topic, value string) error {
 		Value: sarama.StringEncoder(value),
 	}
 
-	partition, offset, err := p.producer.SendMessage(msg)
+	_, _, err := p.producer.SendMessage(msg)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
-	log.Printf("Message sent to topic %s on partition %d with offset %d", topic, partition, offset)
+	// log.Printf("Message sent to topic %s on partition %d with offset %d", topic, partition, offset)
 	return nil
 }
 

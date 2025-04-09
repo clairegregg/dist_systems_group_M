@@ -537,7 +537,7 @@ func broadcastSync(ctx context.Context) {
 		if err != nil {
 			log.Printf("Error sending sync message: %v", err)
 		} else {
-			log.Printf("Broadcasted sync message: %s", string(msgData))
+			// log.Printf("Broadcasted sync message: %s", string(msgData))
 		}
 	}
 }
