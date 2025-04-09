@@ -4,7 +4,8 @@ import map from "./maps"
 
 
 function App() {
-  let WS_URL = "ws://chunk1.clairegregg.com/ws?id=1";
+  let WS_URL = useRef("ws://chunk1.clairegregg.com/ws?id=0");
+  let fallback = useRef("ws://chunk1.clairegregg.com/ws?id=0")
   const CENTRAL_URL = "http://server.clairegregg.com:6441/get-chunk-server"
   let CHUNK_URL = "ws://chunk1.clairegregg.com/ws?id=1";
   let chunkX = 1
@@ -42,7 +43,9 @@ function App() {
     sessionStorage.setItem("localPlayer", JSON.stringify(player));
   }
   
-  const [surroundingURLs, setSurroundingURLs] = useState([])
+  // const [surroundingURLs, setSurroundingURLs] = useState([])
+  const surroundingURLs  = useRef([])
+  let test =[]
 
   useEffect(()=>{
     async function getSurroundingURLs () {
@@ -73,11 +76,20 @@ function App() {
         body: JSON.stringify({ChunkCoordinates:{x:locations[loc][0],y:locations[loc][1]}})
         })
         const data = await rawData.json()
-        let address = data.chunkServerAddress.split("/")
-        urls.push(`ws://${address[0]}/ws${address[1]}`)
+        if(!data.hasOwnProperty("error")){
+          console.log(data)
+          console.log("fetching remote urls")
+          console.log(data)
+          let address = data.chunkServerAddress.split("/")
+          console.log(address)
+          urls.push(`ws://${address[0]}/ws${address[1]}`)
+        }
+        else{
+          console.log(data)
+        }
       }
-      setSurroundingURLs(urls)
-      
+      console.log(urls)
+      surroundingURLs.current = urls
     }
     getSurroundingURLs();
 
@@ -286,6 +298,9 @@ function App() {
 
     // --- WebSocket Setup ---
     const getNewSocket = async (url) => {
+    if(url === undefined){
+      return
+    }
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(
           JSON.stringify({
@@ -304,9 +319,22 @@ function App() {
           })
         );
       }
+      console.log("attempting to change socket")
+      console.log(url)
       socket.close()
       try{
         socket = new WebSocket(url)
+        socket.onerror=function(event){
+            socket = new WebSocket(fallback.current)
+            socket.addEventListener("message", (event) => {
+              if (!mapLoadedRef.current) {
+                remoteMessageQueue.push(event.data);
+              } else {
+                processRemoteMessage(event.data);
+              }
+            });
+            WS_URL.current = fallback.current
+        }
         socket.addEventListener("message", (event) => {
           if (!mapLoadedRef.current) {
             remoteMessageQueue.push(event.data);
@@ -314,10 +342,11 @@ function App() {
             processRemoteMessage(event.data);
           }
         });
-        CHUNK_URL = url
+        fallback.current = WS_URL.current
+        WS_URL.current = url
     }
       catch{
-        socket = new WebSocket(CHUNK_URL)
+        socket = new WebSocket(WS_URL.current)
         socket.addEventListener("message", (event) => {
           if (!mapLoadedRef.current) {
             remoteMessageQueue.push(event.data);
@@ -330,7 +359,7 @@ function App() {
 
 
 
-    let socket = new WebSocket(WS_URL);
+    let socket = new WebSocket(WS_URL.current);
     const handleBeforeUnload = () => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "disconnect", id: localPlayer.id }));
@@ -548,6 +577,7 @@ function App() {
       }
       if (localPlayer.lives <= 0){
         socket.close()
+        sessionStorage.clear()
       }
 
     }
@@ -703,9 +733,11 @@ function App() {
       mapX = localPlayer.X;
       mapY = localPlayer.Y;
       if(chunkSwitch){
-        await getNewSocket(surroundingURLs[chunkSwitch])
+        await getNewSocket(surroundingURLs.current[chunkSwitch])
       }
       await loadMap();
+      console.log(socket)
+      console.log(surroundingURLs.current)
       console.log("Swapped Map")
     }
 
@@ -861,8 +893,8 @@ function App() {
       boundaries.forEach((b) => b.draw());
       pellets.forEach((p) => p.draw());
       localPlayer.draw();
-      console.log("local player")
-      console.log(localPlayer)
+      // console.log("local player")
+      // console.log(localPlayer)
 
       const currentTime = Date.now();
       for (const [id, player] of remotePlayers) {
@@ -871,8 +903,8 @@ function App() {
         }
       }
       remotePlayers.forEach((player) => {
-        console.log("remote player")
-        console.log(player)
+        // console.log("remote player")
+        // console.log(player)
         player.update(delta);
       });
 
@@ -920,7 +952,7 @@ function App() {
     };
   }, []);
 
-  const output = WS_URL.split("/")
+  const output = WS_URL.current.split("/")
   const chunkID = output[3].split("?")[1]
   const newURL = `http://${output[2]}`
 
