@@ -39,7 +39,7 @@ function GlobalLeaderboard({url, ID}) {
     fetchData();
     const intervalId = setInterval(fetchData, 1000);
     return () => clearInterval(intervalId);
-  }, []);
+  }, [CENTRAL_URL_ACTIVE,CENTRAL_URL_LEFT]);
 
   return (
     <div
